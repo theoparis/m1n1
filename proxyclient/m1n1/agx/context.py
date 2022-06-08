@@ -31,17 +31,17 @@ class GPUContext:
 
         # 32K VA pages since buffer manager needs that
         self.uobj = GPUAllocator(agx, "Userspace", 0x1600000000, 0x100000000, ctx=None,
-                                 nG=1, AP=0, PXN=1, UXN=1)
+                                 va_block=32768, nG=1, AP=0, PXN=1, UXN=1)
 
     def bind(self, ctx_id):
-        self.ctx_id = ctx_id
+        self.ctx = ctx_id
         self.uobj.ctx = ctx_id
         self.uat.bind_context(ctx_id, self.ttbr0_base)
 
     def make_stream(self, base):
-        return self.uat.iostream(self.ctx_id, base)
+        return self.uat.iostream(self.ctx, base)
 
-    def new_at(self, addr, objtype, name=None, **flags):
+    def new_at(self, addr, objtype, name=None, track=True, **flags):
         obj = GPUObject(self, objtype)
         obj._stream = self.make_stream
         if name is not None:
@@ -56,19 +56,21 @@ class GPUContext:
 
         print(f"[Context@{self.gpu_context._addr}] Map {obj._name} size {obj._size:#x} @ {obj._addr:#x} ({obj._paddr:#x})")
 
-        self.agx.uat.iomap_at(self.ctx_id, obj._addr, obj._paddr, size_align, **flags)
+        self.agx.uat.iomap_at(self.ctx, obj._addr, obj._paddr, size_align, **flags)
         self.objects[obj._addr] = obj
+        if track:
+            self.agx.reg_object(obj)
 
         return obj
 
-    def buf_at(self, addr, is_pipeline, size, name=None):
-        return self.new_at(addr, Bytes(size), name,
+    def buf_at(self, addr, is_pipeline, size, name=None, track=True):
+        return self.new_at(addr, Bytes(size), name, track=track,
                            AttrIndex=MemoryAttr.Shared, PXN=1,
                            nG=1, AP=(1 if is_pipeline else 0))
 
-    def load_blob(self, addr, is_pipeline, filename):
+    def load_blob(self, addr, is_pipeline, filename, track=True):
         data = open(filename, "rb").read()
-        obj = self.new_at(addr, Bytes(len(data)), filename,
+        obj = self.new_at(addr, Bytes(len(data)), filename, track=track,
                           AttrIndex=MemoryAttr.Shared, PXN=1,
                           nG=1, AP=(1 if is_pipeline else 0))
         obj.val = data
@@ -150,12 +152,12 @@ class GPUMicroSequence:
         return s
 
 class GPUBufferManager:
-    def __init__(self, agx, context):
+    def __init__(self, agx, context, blocks=8):
         self.agx = agx
         self.ctx = context
 
         self.block_ctl_obj = agx.kshared.new(BufferManagerBlockControl)
-        self.block_ctl_obj.total = 0x10
+        self.block_ctl_obj.total = blocks
         self.block_ctl_obj.wptr = 0
         self.block_ctl_obj.unk = 0
         self.block_ctl = self.block_ctl_obj.push().regmap()

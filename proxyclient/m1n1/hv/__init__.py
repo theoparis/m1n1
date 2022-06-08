@@ -1,65 +1,20 @@
 # SPDX-License-Identifier: MIT
-import sys, traceback, struct, array, bisect, os, signal, runpy
+import io, sys, traceback, struct, array, bisect, os, signal, runpy
 from construct import *
-from enum import Enum, IntEnum, IntFlag
 
-from .asm import ARMAsm
-from .tgtypes import *
-from .proxy import IODEV, START, EVENT, EXC, EXC_RET, ExcInfo
-from .utils import *
-from .sysreg import *
-from .macho import MachO
-from .adt import load_adt
-from . import xnutools, shell
+from ..asm import ARMAsm
+from ..tgtypes import *
+from ..proxy import IODEV, START, EVENT, EXC, EXC_RET, ExcInfo
+from ..utils import *
+from ..sysreg import *
+from ..macho import MachO
+from ..adt import load_adt
+from .. import xnutools, shell
+
+from .gdbserver import *
+from .types import *
 
 __all__ = ["HV"]
-
-class MMIOTraceFlags(Register32):
-    CPU = 23, 16
-    WIDTH = 4, 0
-    WRITE = 5
-    MULTI = 6
-
-EvtMMIOTrace = Struct(
-    "flags" / RegAdapter(MMIOTraceFlags),
-    "reserved" / Int32ul,
-    "pc" / Hex(Int64ul),
-    "addr" / Hex(Int64ul),
-    "data" / Hex(Int64ul),
-)
-
-EvtIRQTrace = Struct(
-    "flags" / Int32ul,
-    "type" / Hex(Int16ul),
-    "num" / Int16ul,
-)
-
-class HV_EVENT(IntEnum):
-    HOOK_VM = 1
-    VTIMER = 2
-    USER_INTERRUPT = 3
-    WDT_BARK = 4
-    CPU_SWITCH = 5
-
-VMProxyHookData = Struct(
-    "flags" / RegAdapter(MMIOTraceFlags),
-    "id" / Int32ul,
-    "addr" / Hex(Int64ul),
-    "data" / Array(8, Hex(Int64ul)),
-)
-
-class TraceMode(IntEnum):
-    '''
-Different types of Tracing '''
-
-    OFF = 0
-    BYPASS = 1
-    ASYNC = 2
-    UNBUF = 3
-    WSYNC = 4
-    SYNC = 5
-    HOOK = 6
-    RESERVED = 7
 
 class HV(Reloadable):
     PAC_MASK = 0xfffff00000000000
@@ -126,8 +81,9 @@ class HV(Reloadable):
         self.vbar_el1 = None
         self.want_vbar = None
         self.vectors = [None]
-        self._stepping = False
         self._bps = [None, None, None, None, None]
+        self._wps = [None, None, None, None]
+        self._wpcs = [0, 0, 0, 0]
         self.sym_offset = 0
         self.symbols = []
         self.symbol_dict = {}
@@ -135,6 +91,8 @@ class HV(Reloadable):
         self.novm = False
         self._in_handler = False
         self._sigint_pending = False
+        self._in_shell = False
+        self._gdbserver = None
         self.vm_hooks = [None]
         self.interrupt_map = {}
         self.mmio_maps = DictRangeMap()
@@ -229,6 +187,45 @@ class HV(Reloadable):
             assert False
 
         assert self.p.hv_map(ipa, (index << 2) | flags | t, size, 0) >= 0
+
+    def readmem(self, va, size):
+        '''read from virtual memory'''
+        with io.BytesIO() as buffer:
+            while size > 0:
+                pa = self.p.hv_translate(va, False, False)
+                if pa == 0:
+                    break
+
+                size_in_page = 4096 - (va % 4096)
+                if size < size_in_page:
+                    buffer.write(self.iface.readmem(pa, size))
+                    break
+
+                buffer.write(self.iface.readmem(pa, size_in_page))
+                va += size_in_page
+                size -= size_in_page
+
+            return buffer.getvalue()
+
+    def writemem(self, va, data):
+        '''write to virtual memory'''
+        written = 0
+        while written < len(data):
+            pa = self.p.hv_translate(va, False, True)
+            if pa == 0:
+                break
+
+            size_in_page = 4096 - (va % 4096)
+            if len(data) - written < size_in_page:
+                self.iface.writemem(pa, data[written:])
+                written = len(data)
+                break
+
+            self.iface.writemem(pa, data[written:written + size_in_page])
+            va += size_in_page
+            written += size_in_page
+
+        return written
 
     def trace_irq(self, device, num, count, flags):
         for n in range(num, num + count):
@@ -388,7 +385,44 @@ class HV(Reloadable):
                 update()
 
     def run_shell(self, entry_msg="Entering shell", exit_msg="Continuing"):
-        return shell.run_shell(self.shell_locals, entry_msg, exit_msg)
+        def handle_sigusr1(signal, stack):
+            raise shell.ExitConsole(EXC_RET.HANDLED)
+
+        def handle_sigusr2(signal, stack):
+            raise shell.ExitConsole(EXC_RET.EXIT_GUEST)
+
+        default_sigusr1 = signal.signal(signal.SIGUSR1, handle_sigusr1)
+        try:
+            default_sigusr2 = signal.signal(signal.SIGUSR2, handle_sigusr2)
+            try:
+                self._in_shell = True
+                try:
+                    if not self._gdbserver is None:
+                        self._gdbserver.notify_in_shell()
+                    return shell.run_shell(self.shell_locals, entry_msg, exit_msg)
+                finally:
+                    self._in_shell = False
+            finally:
+                signal.signal(signal.SIGUSR2, default_sigusr2)
+        finally:
+            signal.signal(signal.SIGUSR1, default_sigusr1)
+
+    @property
+    def in_shell(self):
+        return self._in_shell
+
+    def gdbserver(self, address="/tmp/.m1n1-unix", log=None):
+        '''activate gdbserver'''
+        if not self._gdbserver is None:
+            raise Exception("gdbserver is already running")
+
+        self._gdbserver = GDBServer(self, address, log)
+        self._gdbserver.activate()
+
+    def shutdown_gdbserver(self):
+        '''shutdown gdbserver'''
+        self._gdbserver.shutdown()
+        self._gdbserver = None
 
     def handle_mmiotrace(self, data):
         evt = EvtMMIOTrace.parse(data)
@@ -597,11 +631,19 @@ class HV(Reloadable):
             VMSA_LOCK_EL1,
             #SPRR_UNK1_EL1,
             #SPRR_UNK2_EL1,
+            MDSCR_EL1,
         }
         ro = {
             ACC_CFG_EL1,
             ACC_OVRD_EL1,
         }
+        for i in range(len(self._bps)):
+            shadow.add(DBGBCRn_EL1(i))
+            shadow.add(DBGBVRn_EL1(i))
+        for i in range(len(self._wps)):
+            shadow.add(DBGWCRn_EL1(i))
+            shadow.add(DBGWVRn_EL1(i))
+
         value = 0
         if enc in shadow:
             if iss.DIR == MSR_DIR.READ:
@@ -736,9 +778,11 @@ class HV(Reloadable):
                 continue
             self.u.msr(DBGBCRn_EL1(i), DBGBCR(E=1, PMC=0b11, BAS=0xf).value)
 
-        if not self._stepping:
-            return True
-        self._stepping = False
+        # enable all watchpoints again
+        for i, wpc in enumerate(self._wpcs):
+            self.u.msr(DBGWCRn_EL1(i), wpc)
+
+        return True
 
     def handle_break(self, ctx):
         # disable all breakpoints so that we don't get stuck
@@ -746,6 +790,15 @@ class HV(Reloadable):
             self.u.msr(DBGBCRn_EL1(i), 0)
 
         # we'll need to single step to enable these breakpoints again
+        self.u.msr(MDSCR_EL1, MDSCR(SS=1, MDE=1).value)
+        self.ctx.spsr.SS = 1
+
+    def handle_watch(self, ctx):
+        # disable all watchpoints so that we don't get stuck
+        for i in range(len(self._wps)):
+            self.u.msr(DBGWCRn_EL1(i), 0)
+
+        # we'll need to single step to enable these watchpoints again
         self.u.msr(MDSCR_EL1, MDSCR(SS=1, MDE=1).value)
         self.ctx.spsr.SS = 1
 
@@ -802,6 +855,9 @@ class HV(Reloadable):
 
         if ctx.esr.EC == ESR_EC.BKPT_LOWER:
             return self.handle_break(ctx)
+
+        if ctx.esr.EC == ESR_EC.WATCH_LOWER:
+            return self.handle_watch(ctx)
 
         if ctx.esr.EC == ESR_EC.BRK:
             return self.handle_brk(ctx)
@@ -905,10 +961,10 @@ class HV(Reloadable):
 
     def skip(self):
         self.ctx.elr += 4
-        raise shell.ExitConsole(EXC_RET.HANDLED)
+        self.cont()
 
     def cont(self):
-        raise shell.ExitConsole(EXC_RET.HANDLED)
+        os.kill(os.getpid(), signal.SIGUSR1)
 
     def _lower(self):
         if not self.is_fault:
@@ -949,13 +1005,14 @@ class HV(Reloadable):
         elif step:
             self.step()
         else:
-            raise shell.ExitConsole(EXC_RET.HANDLED)
+            self.cont()
 
     def step(self):
         self.u.msr(MDSCR_EL1, MDSCR(SS=1, MDE=1).value)
         self.ctx.spsr.SS = 1
-        self._stepping = True
-        raise shell.ExitConsole(EXC_RET.HANDLED)
+        self.p.hv_pin_cpu(self.ctx.cpu_id)
+        self._switch_context()
+        self.p.hv_pin_cpu(0xffffffffffffffff)
 
     def _switch_context(self, exit=EXC_RET.HANDLED):
         # Flush current CPU context out to HV
@@ -990,8 +1047,13 @@ class HV(Reloadable):
     def add_hw_bp(self, vaddr):
         for i, i_vaddr in enumerate(self._bps):
             if i_vaddr is None:
-                self.u.msr(DBGBCRn_EL1(i), DBGBCR(E=1, PMC=0b11, BAS=0xf).value)
-                self.u.msr(DBGBVRn_EL1(i), vaddr)
+                cpu_id = self.ctx.cpu_id
+                try:
+                    for cpu in self.cpus():
+                        self.u.msr(DBGBCRn_EL1(i), DBGBCR(E=1, PMC=0b11, BAS=0xf).value)
+                        self.u.msr(DBGBVRn_EL1(i), vaddr)
+                finally:
+                    self.cpu(cpu_id)
                 self._bps[i] = vaddr
                 return
         raise ValueError("Cannot add more HW breakpoints")
@@ -999,8 +1061,13 @@ class HV(Reloadable):
     def remove_hw_bp(self, vaddr):
         idx = self._bps.index(vaddr)
         self._bps[idx] = None
-        self.u.msr(DBGBCRn_EL1(idx), 0)
-        self.u.msr(DBGBVRn_EL1(idx), 0)
+        cpu_id = self.ctx.cpu_id
+        try:
+            for cpu in self.cpus():
+                self.u.msr(DBGBCRn_EL1(idx), 0)
+                self.u.msr(DBGBVRn_EL1(idx), 0)
+        finally:
+            self.cpu(cpu_id)
 
     def add_sym_bp(self, name):
         return self.add_hw_bp(self.resolve_symbol(name))
@@ -1008,8 +1075,40 @@ class HV(Reloadable):
     def remove_sym_bp(self, name):
         return self.remove_hw_bp(self.resolve_symbol(name))
 
+    def add_hw_wp(self, vaddr, bas, lsc):
+        for i, i_vaddr in enumerate(self._wps):
+            if i_vaddr is None:
+                self._wps[i] = vaddr
+                self._wpcs[i] = DBGWCR(E=1, PAC=0b11, BAS=bas, LSC=lsc).value
+                cpu_id = self.ctx.cpu_id
+                try:
+                    for cpu in self.cpus():
+                        self.u.msr(DBGWCRn_EL1(i), self._wpcs[i])
+                        self.u.msr(DBGWVRn_EL1(i), vaddr)
+                finally:
+                    self.cpu(cpu_id)
+                return
+        raise ValueError("Cannot add more HW watchpoints")
+
+    def get_wp_bas(self, vaddr):
+        for i, i_vaddr in enumerate(self._wps):
+            if i_vaddr == vaddr:
+                return self._wpcs[i].BAS
+
+    def remove_hw_wp(self, vaddr):
+        idx = self._wps.index(vaddr)
+        self._wps[idx] = None
+        self._wpcs[idx] = 0
+        cpu_id = self.ctx.cpu_id
+        try:
+            for cpu in self.cpus():
+                self.u.msr(DBGWCRn_EL1(idx), 0)
+                self.u.msr(DBGWVRn_EL1(idx), 0)
+        finally:
+            self.cpu(cpu_id)
+
     def exit(self):
-        raise shell.ExitConsole(EXC_RET.EXIT_GUEST)
+        os.kill(os.getpid(), signal.SIGUSR2)
 
     def reboot(self):
         print("Hard rebooting the system")
@@ -1544,7 +1643,9 @@ class HV(Reloadable):
 
     def _handle_sigint(self, signal=None, stack=None):
         self._sigint_pending = True
+        self.interrupt()
 
+    def interrupt(self):
         if self._in_handler:
             return
 
@@ -1603,4 +1704,4 @@ class HV(Reloadable):
         self.started_cpus.add(0)
         self.p.hv_start(self.entry, self.guest_base + self.bootargs_off)
 
-from . import trace
+from .. import trace
