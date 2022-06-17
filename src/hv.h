@@ -49,8 +49,8 @@ typedef enum _hv_entry_type {
 
 /* vGICv3 structs 
    yes this can likely be improved 
-   are all these regs really needed for M1/M2
-   especially when EL3 is not implemented? */
+   any regs that won't be used during normal operation will have 
+   "reserved_" in front of them to pad out dist to 64k size*/
 
 // distributor struct
 
@@ -96,12 +96,12 @@ typedef struct vgicv3_distributor {
     unsigned int interrupt_priority_regs[255];
 
     //0x0800-0x081c - GICD_ITARGETSR0-R7 (max needed for "v1" SoC versions)
+    //reserved, Apple SoCs do not support legacy operation, so this is useless
     unsigned int interrupt_processor_target_regs_ro[8];
 
     //0x0820-0xBF8 - GICD_ITARGETSR8-R255
-    //this should probably only be used on "v2" versions of M series SoCs, limit to 20 cores
-    //still couldn't hurt to have all for now
-    unsigned int interrupt_processor_target_regs[247];
+    //ditto above
+    unsigned int interrupt_processor_target_regs[248];
 
     //0x0C00-0x0CFC - GICD_ICFGR0-63
     unsigned int interrupt_config_regs[64];
@@ -173,7 +173,9 @@ typedef struct vgicv3_distributor {
 
 } vgicv3_dist;
 
-
+typedef struct vgicv3_redistributor_region {
+    //8 of these on M1/M2, 10-20 on M1v2
+} vgicv3_vcpu_redist;
 
 /* VM */
 void hv_pt_init(void);

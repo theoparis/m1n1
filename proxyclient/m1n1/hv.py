@@ -1581,12 +1581,13 @@ class HV(Reloadable):
 
         print("Shutting down framebuffer...")
         self.p.fb_shutdown(True)
+        #avoid enabling SPRR/GXF for now
+        #not running macOS
+        #print("Enabling SPRR...")
+        #self.u.msr(SPRR_CONFIG_EL1, 1)
 
-        print("Enabling SPRR...")
-        self.u.msr(SPRR_CONFIG_EL1, 1)
-
-        print("Enabling GXF...")
-        self.u.msr(GXF_CONFIG_EL1, 1)
+        #print("Enabling GXF...")
+        #self.u.msr(GXF_CONFIG_EL1, 1)
 
         print(f"Jumping to entrypoint at 0x{self.entry:x}")
 
