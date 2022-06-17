@@ -8,7 +8,7 @@ __all__ = []
 
 class WorkCommandBarrier(ConstructClass):
     """
-        sent before WorkCommand_1 on the Submit3d queue.
+        sent before WorkCommand3D on the Submit3d queue.
         Might be for initilzing the tile buckets?
 
     Example:
@@ -28,7 +28,7 @@ class WorkCommandBarrier(ConstructClass):
 
 class WorkCommandInitBM(ConstructClass):
     """
-        occationally sent before WorkCommand_0 on the SubmitTA queue.
+        occationally sent before WorkCommandTA on the SubmitTA queue.
 
     Example:
     00000004 0c378018 ffffffa0 00000c00 00000006 00000900 08002c9a 00000000
@@ -47,18 +47,39 @@ class WorkCommandInitBM(ConstructClass):
 
 class WorkCommandSubC(ConstructClass):
     subcon = Struct(
-        "unkptr_0" / Hex(Int64ul),
-        "unk_8" / Hex(Int32ul),
-        "unk_c" / Hex(Int32ul),
-        "unk_10" / Hex(Int64ul),
-        "unk_18" / Hex(Int64ul),
-        "unk_20" / Hex(Int32ul),
-        "unk_24" / Hex(Int32ul),
-        "unk_28" / HexDump(Bytes(0xa0 - 0x28)),
+        "unkptr_0" / Int64ul,
+        "unk_8" / Int32ul,
+        "unk_c" / Int32ul,
+        "unk_10" / Int64ul,
+        "unk_18" / Int64ul,
+        "unk_20" / Int32ul,
+        "unk_24" / Int32ul,
+        "unk_28" / Int32ul,
+        "unkptr_2c" / Int64ul,
+        "unk_34" / HexDump(Bytes(24)),
+        "unk_4c" / Int32ul,
+        "unkptr_50" / Int64ul,
+        "unk_58" / HexDump(Bytes(0x94 - 0x58)),
+        "unk_94" / Int32ul,
+        "unk_98" / Int64ul,
         "context_ptr" / Int64ul,
     )
 
-class WorkCommand_3(ConstructClass):
+    def __init__(self):
+        super().__init__()
+        self.unk_18 = 0
+        self.unk_20 = 0
+        self.unk_24 = 0
+        self.unk_28 = 0
+        self.unkptr_2c = 0
+        self.unk_34 = bytes(24)
+        self.unk_4c = 0
+        self.unkptr_50 = 0
+        self.unk_58 = bytes(0x94 - 0x58)
+        self.unk_94 = 0
+        self.unk_98 = 0
+        self.context_ptr = 0
+class WorkCommandCP(ConstructClass):
     """
     For compute
 
@@ -126,7 +147,7 @@ class WorkCommand1_UnkBuf2(ConstructClass):
         "unk_10" / Int64ul,
     )
 
-class WorkCommand_1(ConstructClass):
+class WorkCommand3D(ConstructClass):
     """
     For 3D
 
@@ -208,7 +229,7 @@ class WorkCommand0_UnkBuf(ConstructValueClass):
     def __init__(self):
         self.value = bytes(0x18)
 
-class WorkCommand_0(ConstructClass):
+class WorkCommandTA(ConstructClass):
     """
     For TA
 
@@ -257,7 +278,7 @@ class WorkCommand_0(ConstructClass):
         "controllist_ptr" / Hex(Int64ul),
         "controllist_size" / Hex(Int32ul),
         "controllist" / ROPointer(this.controllist_ptr, ControlList),
-        "unk_478" / Int32ul,
+        "ev_3d" / Int32ul,
         "barrier_tag" / Int32ul,
 
         "struct_3" / StartTACmdStruct3, # 0x114 bytes
@@ -298,9 +319,9 @@ class CmdBufWork(ConstructClass):
     subcon = Struct(
         "cmdid" / Peek(Int32ul),
         "cmd" / Switch(this.cmdid, {
-            0: WorkCommand_0,
-            1: WorkCommand_1,
-            3: WorkCommand_3,
+            0: WorkCommandTA,
+            1: WorkCommand3D,
+            3: WorkCommandCP,
             4: WorkCommandBarrier,
             6: WorkCommandInitBM,
         })
