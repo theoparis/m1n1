@@ -50,7 +50,7 @@ typedef enum _hv_entry_type {
 /* vGICv3 structs 
    yes this can likely be improved 
    any regs that won't be used during normal operation will have 
-   "reserved_" in front of them to pad out dist to 64k size*/
+   "reserved_" in front of them to pad out dist to 64k size */
 
 // distributor struct
 
@@ -173,6 +173,9 @@ typedef struct vgicv3_distributor {
 
 } vgicv3_dist;
 
+//redist regs
+//as with dist, reserved_ in front of regs
+//that won't be used on M1/M2
 typedef struct vgicv3_redistributor_region {
     //8 of these on M1/M2, 10-20 on M1v2
 } vgicv3_vcpu_redist;

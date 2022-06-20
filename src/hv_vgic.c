@@ -47,24 +47,23 @@ vgicv3_dist *dist_ptr;
 
 /* Initialization code */
 
-// initializes the vgic registers, maps them to memory 
+// initializes and configures the vgic registers, maps them to memory 
 // (since we're dealing with one VM only)
 
 
-void vgicv3_init(void)
+int hv_vgicv3_init(void)
 {
     //set up vGIC struct, set pointer to 0x805570000 (current pre-designated pointer for dist)
     //warning likely dumb idea
 
     dist_ptr = (vgicv3_dist *)0x805570000;
     memcpy(dist_ptr, &dist, sizeof(vgicv3_dist));
-    //clean up leftover from global initialization so that we don't have issues
+    //clean up leftover from global initialization so that
+    //memory is again usable by other processes
     memset(&dist, 0, sizeof(vgicv3_dist));
-    // likely unnecessary for now
-    //mmu_add_mapping(0x805570000, 0x805570000, sizeof(struct vgicv3_distributor), MAIR_IDX_NORMAL, PERM_RWX);
 
     //set vGIC values to reset
-    vgicv3_init_dist_registers();
+    hv_vgicv3_init_dist_registers();
     //set up ICC_CTLR_EL1 to set virtual interrupts to priority drop only
     int icc_ctlr_sts = 0;
     icc_ctlr_sts = mrs(ICC_CTLR_EL1);
@@ -87,20 +86,21 @@ void vgicv3_init(void)
 
 /* vgicv3_init_dist_registers - sets up reset values for distributor registers
    expected to only be called once
+   guest OS will change a lot of these
 */
 
-void vgicv3_init_dist_registers(void)
+void hv_vgicv3_init_dist_registers(void)
 {
     dist_ptr->ctl_register = (BIT(6) | BIT(4) | BIT(1) | BIT(0));
     dist_ptr->type_register = (BIT(22) | BIT(21) | BIT(20) | BIT(19));
     dist_ptr->type_register_2 = 0;
     dist_ptr->err_sts = 0;
     dist_ptr->imp_id_register = (BIT(10) | BIT(5) | BIT(4) | BIT(3) | BIT(1) | BIT(0));
-    //set all SPIs to group 1, enable all SPIs
+    //set all SPIs to group 1, disable all SPIs
     for(int i = 0; i < 32; i++)
     {
-        dist_ptr->interrupt_group_registers[i] = 0xffffffff;
-        dist_ptr->interrupt_set_enable_regs[i] = 0xffffffff;
+        dist_ptr->interrupt_group_registers[i] = 0;
+        dist_ptr->interrupt_set_enable_regs[i] = 0;
     }
 
 }
@@ -108,7 +108,7 @@ void vgicv3_init_dist_registers(void)
 /*
 * vgicv3_init_list_registers - turns on the list registers
 */
-void vgicv3_init_list_registers(int n)
+void hv_vgicv3_init_list_registers(int n)
 {
     switch(n)
         {
@@ -136,17 +136,15 @@ void vgicv3_init_list_registers(int n)
    (we're assuming for our purposes the hypervisor will only be used to boot Windows)
 */
 
-// should we also enable TSEI (due to hardware bug)?
-
-int vgicv3_enable_virtual_interrupts(void)
+int hv_vgicv3_enable_virtual_interrupts(void)
 {
     //set VMCR to reset values, then enable virtual group 1 interrupts (aka IRQs)
     //should FIQs also be enabled? not sure how nicely Windows plays with them
     msr(ICH_VMCR_EL2, 0);
     msr(ICH_VMCR_EL2, (BIT(1)));
-    //bit 13 sets TSEI (tentatively for now), bit 0 enables the virtual CPU interface registers
+    //bit 0 enables the virtual CPU interface registers
     //AMO/IMO/FMO set by m1n1 on boot
-    msr(ICH_HCR_EL2, (BIT(13) | BIT(0)));
+    msr(ICH_HCR_EL2, (BIT(0)));
 
 
     return 0;
