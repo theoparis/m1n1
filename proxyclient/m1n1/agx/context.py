@@ -4,7 +4,7 @@ from ..malloc import Heap
 from construct.core import *
 from ..fw.agx.channels import *
 from ..fw.agx.cmdqueue import *
-from ..fw.agx.controllist import *
+from ..fw.agx.microsequence import *
 from ..hw.uat import MemoryAttr
 from .object import *
 import textwrap
@@ -15,6 +15,7 @@ class GPUContext:
         self.uat = self.agx.uat
         self.u = self.agx.u
         self.p = self.agx.p
+        self.verbose = False
 
         self.context_info = agx.kshared.new(ContextInfo)
         self.context_info.fb_ptr = 0
@@ -31,11 +32,18 @@ class GPUContext:
 
         # 32K VA pages since buffer manager needs that
         self.uobj = GPUAllocator(agx, "Userspace", 0x1600000000, 0x100000000, ctx=None,
+                                 guard_pages=1,
                                  va_block=32768, nG=1, AP=0, PXN=1, UXN=1)
+
+        self.pipeline_base = 0x1100000000
+        self.pipeline_size = 1 << 32
+        self.pobj = GPUAllocator(agx, "Pipelines", self.pipeline_base + 0x10000, self.pipeline_size,
+                                 ctx=None, guard_pages=1, nG=1, AP=0, PXN=1, UXN=1)
 
     def bind(self, ctx_id):
         self.ctx = ctx_id
         self.uobj.ctx = ctx_id
+        self.pobj.ctx = ctx_id
         self.uat.bind_context(ctx_id, self.ttbr0_base)
 
     def make_stream(self, base):
@@ -54,12 +62,11 @@ class GPUContext:
         #if isinstance(obj.val, ConstructClassBase):
             #obj.val._addr = obj._addr
 
-        print(f"[Context@{self.gpu_context._addr}] Map {obj._name} size {obj._size:#x} @ {obj._addr:#x} ({obj._paddr:#x})")
+        self.agx.log(f"[Context@{self.gpu_context._addr}] Map {obj._name} size {obj._size:#x} @ {obj._addr:#x} ({obj._paddr:#x})")
 
         self.agx.uat.iomap_at(self.ctx, obj._addr, obj._paddr, size_align, **flags)
         self.objects[obj._addr] = obj
-        if track:
-            self.agx.reg_object(obj)
+        self.agx.reg_object(obj, track=track)
 
         return obj
 
@@ -142,7 +149,7 @@ class GPUMicroSequence:
 
     def dump(self):
         chexdump(self.agx.iface.readmem(self.obj._paddr, self.size))
-        print(ControlList.parse_stream(self.agx.uat.iostream(0, self.obj._addr)))
+        print(MicroSequence.parse_stream(self.agx.uat.iostream(0, self.obj._addr)))
 
     def __str__(self):
         s = f"GPUMicroSequence: {len(self.ops)} ops\n"
@@ -204,7 +211,7 @@ class GPUBufferManager:
         idx = self.block_ctl.wptr.val
         total = self.block_ctl.total.val
         while idx < total:
-            block = self.ctx.uobj.new_buf(self.block_size, "BM Block")
+            block = self.ctx.uobj.new_buf(self.block_size, "BM Block", track=False)
             self.block_list[idx] = block._addr // self.page_size
 
             page_idx = idx * self.pages_per_block

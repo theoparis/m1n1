@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
-import bisect
+import bisect, time
 
 from .object import GPUObject, GPUAllocator
 from .initdata import build_initdata
 from .channels import *
+from .event import GPUEventManager
+from ..proxy import IODEV
 from ..malloc import Heap
 from ..hw.uat import UAT, MemoryAttr
 from ..fw.agx import AGXASC
@@ -17,8 +19,10 @@ class AGXQueue:
 
 class AGX:
     PAGE_SIZE = 0x4000
+    MAX_EVENTS = 128
 
     def __init__(self, u):
+        self.start_time = time.time()
         self.u = u
         self.p = u.proxy
 
@@ -29,7 +33,7 @@ class AGX:
 
         self.log("Initializing allocations")
 
-        self.all_objects = []
+        self.all_objects = {}
 
         # Memory areas
         self.fw_va_base = self.sgx_dev.rtkit_private_vm_region_base
@@ -67,20 +71,28 @@ class AGX:
                                  block=self.PAGE_SIZE)
 
         self.mon = None
+        self.event_mgr = GPUEventManager(self)
+
+        self.p.iodev_set_usage(IODEV.FB, 0)
+
 
     def find_object(self, addr):
-        self.all_objects.sort()
+        all_objects = list(self.all_objects.items())
+        all_objects.sort()
 
-        idx = bisect.bisect_left(self.all_objects, (addr + 1, "")) - 1
-        if idx < 0 or idx >= len(self.all_objects):
+        idx = bisect.bisect_left(all_objects, (addr + 1, "")) - 1
+        if idx < 0 or idx >= len(all_objects):
             return None, None
 
-        return self.all_objects[idx]
+        return all_objects[idx]
 
-    def reg_object(self, obj):
-        self.all_objects.append((obj._addr, obj))
-        if self.mon is not None:
+    def reg_object(self, obj, track=True):
+        self.all_objects[obj._addr] = obj
+        if track and self.mon is not None:
             obj.add_to_mon(self.mon)
+
+    def unreg_object(self, obj):
+        del self.all_objects[obj._addr]
 
     def alloc_channels(self, cls, name, channel_id, count=1, rx=False):
 
@@ -137,14 +149,29 @@ class AGX:
         self.ch_info.FWLog.ringbuffer_addr = self.kshared.buf(0x150000, "FWLog_Dummy")
 
     def poll_channels(self):
-        self.ch.event.poll()
         for chan in self.ch.log:
             chan.poll()
         self.ch.ktrace.poll()
         self.ch.stats.poll()
+        self.ch.event.poll()
 
     def kick_firmware(self):
         self.asc.db.doorbell(0x10)
+
+    def faulted(self):
+        fault_code = self.p.read64(0x204017030)
+        if fault_code == 0xacce5515abad1dea:
+            raise Exception("Got fault notification, but fault address is unreadable")
+
+        fault_addr = fault_code >> 24
+        if fault_addr & 0x8000000000:
+            fault_addr |= 0xffffff8000000000
+        self.log(f"FAULT CODE: {fault_code:#x} ({fault_addr:#x})")
+        base, obj = self.find_object(fault_addr)
+        info = ""
+        if obj is not None:
+            info = f" ({obj!s} + {fault_addr - base:#x})"
+        raise Exception(f"GPU fault at {fault_addr:#x}{info}")
 
     def start(self):
         self.log("Starting ASC")
@@ -179,5 +206,16 @@ class AGX:
     def work(self):
         self.asc.work()
 
+    def wait_for_events(self, timeout=1.0):
+        now = time.time()
+        deadline = now + timeout
+        cnt = self.event_mgr.event_count
+        while now < deadline and self.event_mgr.event_count == cnt:
+            self.asc.work()
+            now = time.time()
+        if self.event_mgr.event_count == cnt:
+            raise Exception("Timed out waiting for events")
+
     def log(self, msg):
-       print("[AGX] " + msg)
+        t = time.time() - self.start_time
+        print(f"[AGX][{t:10.03f}] " + msg)

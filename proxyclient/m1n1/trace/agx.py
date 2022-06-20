@@ -7,7 +7,7 @@ from ..hw.uat import UAT, MemoryAttr, PTE, Page_PTE, TTBR
 from ..fw.agx.initdata import InitData as NewInitData
 from ..fw.agx.channels import *
 from ..fw.agx.cmdqueue import *
-from ..fw.agx.controllist import *
+from ..fw.agx.microsequence import *
 
 from m1n1.proxyutils import RegMonitor
 from m1n1.constructutils import *
@@ -300,8 +300,9 @@ class AGXTracer(ASCTracer):
         self.last_3d = None
 
         self.trace_userva = False
-        self.pause_after_init = True
+        self.pause_after_init = False
         self.shell_after_init = False
+        self.encoder_id_filter = None
 
         self.add_mon_regions()
 
@@ -523,7 +524,18 @@ class AGXTracer(ASCTracer):
         elif isinstance(msg, RunCmdQueueMsg):
             self.log(f"== Work notification (type {msg.queue_type})==")
             queue = self.get_cmdqueue(msg.cmdqueue_addr)
-            for wi in queue.get_workitems(msg):
+            work_items = list(queue.get_workitems(msg))
+            if self.encoder_id_filter is not None:
+                for wi in work_items:
+                    if wi.cmd.magic == 0:
+                        # TA
+                        if not self.encoder_id_filter(wi.cmd.struct_3.encoder_id):
+                            return True
+                    if wi.cmd.magic == 1:
+                        # 3D
+                        if not self.encoder_id_filter(wi.cmd.struct_6.encoder_id):
+                            return True
+            for wi in work_items:
                 self.log(str(wi))
                 if msg.queue_type == 2:
                     pass
@@ -589,9 +601,6 @@ class AGXTracer(ASCTracer):
 
             chexdump(kread(wi0.addr, 0x600), print_fn=self.log)
             self.log(f"  context_id = {context:#x}")
-            self.log(f"  unk_c @ {wi0.unkptr_c:#x}: {wi0.unk_c!s}")
-            self.log(f"    unkptr_0 @ {wi0.unk_c.unkptr_0:#x}:")
-            chexdump(kread(wi0.unk_c.unkptr_0, 0x100), print_fn=self.log)
             self.dump_buffer_manager(wi0.buffer_mgr, kread, read)
             self.log(f"  unk_emptybuf @ {wi0.unk_emptybuf_addr:#x}:")
             chexdump(kread(wi0.unk_emptybuf_addr, 0x1000), print_fn=self.log)
@@ -606,7 +615,7 @@ class AGXTracer(ASCTracer):
             self.log(f"  unkptr_45c @ {wi0.unkptr_45c:#x}:")
             chexdump(read(wi0.unkptr_45c, 0x1800), print_fn=self.log)
 
-            for i in wi0.controllist.value:
+            for i in wi0.microsequence.value:
                 i = i.cmd
                 if isinstance(i, StartTACmd):
                     self.log(f"  # StartTACmd")
@@ -642,17 +651,17 @@ class AGXTracer(ASCTracer):
                 return self.uat.ioread(context, off, size)
 
             self.log(f" context_id = {context:#x}")
-            cmd3d = wi1.controllist.value[0].cmd
+            cmd3d = wi1.microsequence.value[0].cmd
 
             self.log(f" 3D:")
             self.log(f"  struct1 @ {cmd3d.struct1_addr:#x}: {cmd3d.struct1!s}")
             self.log(f"  struct2 @ {cmd3d.struct2_addr:#x}: {cmd3d.struct2!s}")
-            self.log(f"    tvb_start_addr @ {cmd3d.struct2.tvb_start_addr:#x}:")
-            if cmd3d.struct2.tvb_start_addr:
-                chexdump(read(cmd3d.struct2.tvb_start_addr, 0x1000), print_fn=self.log)
-            self.log(f"    tvb_tilemap_addr @ {cmd3d.struct2.tvb_tilemap_addr:#x}:")
-            if cmd3d.struct2.tvb_tilemap_addr:
-                chexdump(read(cmd3d.struct2.tvb_tilemap_addr, 0x1000), print_fn=self.log)
+            #self.log(f"    tvb_start_addr @ {cmd3d.struct2.tvb_start_addr:#x}:")
+            #if cmd3d.struct2.tvb_start_addr:
+                #chexdump(read(cmd3d.struct2.tvb_start_addr, 0x1000), print_fn=self.log)
+            #self.log(f"    tvb_tilemap_addr @ {cmd3d.struct2.tvb_tilemap_addr:#x}:")
+            #if cmd3d.struct2.tvb_tilemap_addr:
+                #chexdump(read(cmd3d.struct2.tvb_tilemap_addr, 0x1000), print_fn=self.log)
             #self.log(f"    aux_fb_ptr @ {cmd3d.struct2.aux_fb_ptr:#x}:")
             #chexdump(read(cmd3d.struct2.aux_fb_ptr, 0x100), print_fn=self.log)
             self.log(f"    pipeline_base @ {cmd3d.struct2.pipeline_base:#x}:")
@@ -662,8 +671,6 @@ class AGXTracer(ASCTracer):
             self.log(f"    unkptr_18 @ {cmd3d.buf_thing.unkptr_18:#x}:")
             chexdump(read(cmd3d.buf_thing.unkptr_18, 0x1000), print_fn=self.log)
 
-            self.log(f"  unkptr_1c @ {cmd3d.unkptr_1c:#x}:")
-            chexdump(kread(cmd3d.unkptr_1c, 0x400), print_fn=self.log)
             self.log(f"  unk_24 @ {cmd3d.unkptr_24:#x}: {cmd3d.unk_24!s}")
             self.log(f"  struct6 @ {cmd3d.struct6_addr:#x}: {cmd3d.struct6!s}")
             self.log(f"    unknown_buffer @ {cmd3d.struct6.unknown_buffer:#x}:")
@@ -674,7 +681,7 @@ class AGXTracer(ASCTracer):
             self.log(f"  unk_buf2_ptr @ {cmd3d.unk_buf2_ptr:#x}:")
             chexdump(kread(cmd3d.unk_buf2_ptr, 0x18), print_fn=self.log)
 
-            for i in wi1.controllist.value:
+            for i in wi1.microsequence.value:
                 i = i.cmd
                 if not isinstance(i, Finalize3DCmd):
                     continue
@@ -701,8 +708,8 @@ class AGXTracer(ASCTracer):
             self.dump_buffer_manager(wi1.buffer_mgr, kread, read)
             self.log(f"  unk_emptybuf @ {wi1.unk_emptybuf_addr:#x}:")
             chexdump(kread(wi1.unk_emptybuf_addr, 0x1000), print_fn=self.log)
-            self.log(f"  tvb_addr @ {wi1.tvb_addr:#x}:")
-            chexdump(read(wi1.tvb_addr, 0x1000), print_fn=self.log)
+            #self.log(f"  tvb_addr @ {wi1.tvb_addr:#x}:")
+            #chexdump(read(wi1.tvb_addr, 0x1000), print_fn=self.log)
 
     def handle_compute(self, msg):
         self.log("Got Compute Work Item")
@@ -728,7 +735,7 @@ class AGXTracer(ASCTracer):
 
         self.log("StartComputeCmd:")
         try:
-            ccmd = wi.controllist.value[0].cmd
+            ccmd = wi.microsequence.value[0].cmd
         except:
             self.log(" MISSING!")
             return
@@ -927,6 +934,7 @@ class AGXTracer(ASCTracer):
         self.trace_uatrange(0, self.state.initdata.regionA_addr, 0x4000, name="regionA")
         self.trace_uatrange(0, self.state.initdata.regionB_addr, 0x6bc0, name="regionB")
         self.trace_uatrange(0, self.state.initdata.regionC_addr, 0x11d40, name="regionC")
+        self.trace_uatrange(0, self.state.initdata.regionB.unkptr_214, 0x4000, name="Shared AP=0 region")
 
     def add_mon_regions(self):
         initdata = self.state.initdata
@@ -934,6 +942,14 @@ class AGXTracer(ASCTracer):
             self.mon_addva(0, initdata.regionA_addr, 0x4000, "RegionA")
             self.mon_addva(0, initdata.regionB_addr, 0x6bc0, "RegionB")
             self.mon_addva(0, initdata.regionC_addr, 0x11d40, "RegionC")
+            self.mon_addva(0, initdata.regionB.unkptr_170, 0xc0, "unkptr_170")
+            self.mon_addva(0, initdata.regionB.unkptr_178, 0x1c0, "unkptr_178")
+            self.mon_addva(0, initdata.regionB.unkptr_180, 0x140, "unkptr_180")
+            self.mon_addva(0, initdata.regionB.unkptr_190, 0x80, "unkptr_190")
+            self.mon_addva(0, initdata.regionB.unkptr_198, 0xc0, "unkptr_198")
+            self.mon_addva(0, initdata.regionB.unkptr_214, 0x4000, "Shared AP=0 region")
+            self.mon_addva(0, initdata.unkptr_20.unkptr_0, 0x40, "unkptr_20.unkptr_0")
+            self.mon_addva(0, initdata.unkptr_20.unkptr_8, 0x40, "unkptr_20.unkptr_8")
 
     def pong_init(self, addr):
         self.log("UAT at init time:")

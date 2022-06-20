@@ -59,7 +59,7 @@ class GPUCmdQueueChannel(GPUTXChannel):
         msg.event_number = event
         msg.new_queue = 1 if queue.first_time else 0
         queue.first_time = False
-        print(msg)
+        #print(msg)
         self.send_message(msg)
 
 class GPUDeviceControlChannel(GPUTXChannel):
@@ -73,6 +73,14 @@ class GPUDeviceControlChannel(GPUTXChannel):
 
 class GPUEventChannel(GPURXChannel):
     MSG_CLASS = EventMsg
+
+    def handle_message(self, msg):
+        if isinstance(msg, FlagMsg):
+            self.agx.event_mgr.fired(msg.firing)
+        elif isinstance(msg, FaultMsg):
+            self.agx.faulted()
+        else:
+            self.log(f"Unknown event: {msg}")
 
 class GPULogChannel(GPURXChannel):
     MSG_CLASS = FWLogMsg
