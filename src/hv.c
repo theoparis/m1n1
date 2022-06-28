@@ -72,6 +72,8 @@ void hv_init(void)
                  HCR_E2H | // VHE mode (forced)
                  HCR_RW |  // AArch64 guest
                  HCR_AMO | // Trap SError exceptions
+                 HCR_IMO | // Trap IRQ exceptions (for now)
+                 HCR_FMO | // Trap FIQ exceptions (effectively required for now)
                  HCR_VM);  // Enable stage 2 translation
 
     // No guest vectors initially

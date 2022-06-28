@@ -84,8 +84,9 @@ int hv_vgicv3_init(void)
     return 0;
 }
 
-/* vgicv3_init_dist_registers - sets up reset values for distributor registers
+/* vgicv3_init_dist_registers - sets up reset values for RO/RW distributor registers
    expected to only be called once
+   WO registers will be set to 0, but writes will be ignored afterwards
    guest OS will change a lot of these
 */
 
@@ -138,8 +139,7 @@ void hv_vgicv3_init_list_registers(int n)
 
 int hv_vgicv3_enable_virtual_interrupts(void)
 {
-    //set VMCR to reset values, then enable virtual group 1 interrupts (aka IRQs)
-    //should FIQs also be enabled? not sure how nicely Windows plays with them
+    //set VMCR to reset values, then enable virtual group 0 and 1 interrupts
     msr(ICH_VMCR_EL2, 0);
     msr(ICH_VMCR_EL2, (BIT(1)));
     //bit 0 enables the virtual CPU interface registers
