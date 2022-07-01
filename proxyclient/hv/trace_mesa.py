@@ -55,8 +55,6 @@ mesa_pins = {
 
 }
 
-# Trace entire SPI MMIO range, can probably disable
-#trace_range(irange(0x000000019B108000, 0x4000), mode=TraceMode.SYNC)
 
 gpio_tracer = GPIOTracer(hv, "/arm-io/gpio0", mesa_pins, verbose=1)
 gpio_tracer.start()
@@ -66,7 +64,7 @@ dart_sio_tracer.start()
 
 iomon = RegMonitor(hv.u, ascii=True)
 
-def readmem_iova(addr, size):
+def readmem_iova(addr, size, readfn=None):
     try:
         return dart_sio_tracer.dart.ioread(0, addr, size)
     except Exception as e:
@@ -119,7 +117,6 @@ class SIOEp(EP):
 
     @msg(3, DIR.TX, SIOSetup)
     def m_Setup(self, msg):
-        #iomon.poll()
         if msg.EP == 0 and msg.PARAM == 0x1:
             self.state.iova = msg.DATA << 12
 
@@ -129,24 +126,24 @@ class SIOEp(EP):
                       name=f"SIO IOVA region at 0x{self.state.iova:08x}",
                       offset=self.state.iova)
 
-        elif msg.EP == 0 and msg.PARAM == 0xb:
-            # second iova block, maybe config
-            self.state.iova_cfg = msg.DATA << 12
+        #elif msg.EP == 0 and msg.PARAM == 0xb:
+            ## second iova block, maybe config
+            #self.state.iova_cfg = msg.DATA << 12
 
-        elif msg.EP == 0 and msg.PARAM == 0xc:
-            # size for PARAM == 0xb?
-            iomon.add(self.state.iova_cfg, msg.DATA * 8,
-                      name=f"SIO IOVA CFG region at 0x{self.state.iova_cfg:08x}",
-                      offset=self.state.iova_cfg)
+        #elif msg.EP == 0 and msg.PARAM == 0xc:
+            ## size for PARAM == 0xb?
+            #iomon.add(self.state.iova_cfg, msg.DATA * 8,
+                      #name=f"SIO IOVA CFG region at 0x{self.state.iova_cfg:08x}",
+                      #offset=self.state.iova_cfg)
 
-        #if msg.EP == 0 and msg.PARAM == 0xd:
-            ## possible fingerprint sensor IOVA region
-            #self.state.iova_unk = msg.DATA << 12
+        if msg.EP == 0 and msg.PARAM == 0xd:
+            # possible fingerprint sensor IOVA region
+            self.state.iova_unk = msg.DATA << 12
 
-        #elif msg.EP == 0 and msg.PARAM == 0xe:
-            #iomon.add(self.state.iova_unk, msg.DATA * 8,
-                      #name=f"SIO IOVA UNK region at {self.state.iova_unk:08x}",
-                      #offset=self.state.iova_unk)
+        elif msg.EP == 0 and msg.PARAM == 0xe:
+            iomon.add(self.state.iova_unk, msg.DATA * 8,
+                      name=f"SIO IOVA UNK region at {self.state.iova_unk:08x}",
+                      offset=self.state.iova_unk)
 
     @msg(5, DIR.TX, SIOConfig)
     def m_Config(self, msg):
@@ -158,6 +155,12 @@ class SIOEp(EP):
 
     @msg(6, DIR.TX, SIOSetupIO)
     def m_SetupIO(self, msg):
+        if msg.EP == 0x18 or 0x19:
+            iomon.poll()
+        return
+
+    @msg(0x68, DIR.RX, SIOCompleteIO)
+    def m_CompleteIO(self, msg):
         if msg.EP == 0x18:
             if self.state.iova is None:
                 return
@@ -169,14 +172,9 @@ class SIOEp(EP):
             if buf == 0x2:
                 self.log("Mesa command interrupted!")
                 return
-            self.log_mesa("TO Mesa? (0x18)", self.tracer.ioread(buf, size))
+            self.log_mesa("EP 0x18", self.tracer.ioread(buf, size))
             return
-        return
-
-    @msg(0x68, DIR.RX, SIOCompleteIO)
-    def m_CompleteIO(self, msg):
         if msg.EP == 0x19:
-            iomon.poll()
             if self.state.iova is None:
                 return
 
@@ -187,7 +185,12 @@ class SIOEp(EP):
             if buf == 0x2:
                 self.log("Mesa command interrupted!")
                 return
-            self.log_mesa("FROM Mesa? (0x19)", self.tracer.ioread(buf, size))
+            if size >= 0x7200:
+                with open("large_message.bin", "wb") as fd:
+                    fd.write(self.tracer.ioread(buf, size))
+                print("Fingerprint record message dumped.")
+                return
+            self.log_mesa("EP 0x19", self.tracer.ioread(buf, size))
             return
 
     def log_mesa(self, label, data):
@@ -202,17 +205,8 @@ class SIOTracer(ASCTracer):
     }
 
 
-# RegMonitor for fingerprint endpoints?
-# Read pages pointed to by SIO
-#iomon.add((0x3d0 << 12), 0x4000, name="MESA 0x19?", offset=(0x3d0 << 12))
-#trace_device("/arm-io/spi2", True)
-#iomon.add((0x3db << 12), 0x4000, name="MESA 0x18?", offset=(0x3db << 12))
-
-
-
 sio_tracer = SIOTracer(hv, "/arm-io/sio", verbose=1)
 sio_tracer.start(dart=dart_sio_tracer.dart)
 
-# This doesn't seem to do anything
-spi_tracer = SPITracer(hv, "/arm-io/" + spi_node.name, verbose=1)
+spi_tracer = SPITracer(hv, "/arm-io/spi2", verbose=2)
 spi_tracer.start()
