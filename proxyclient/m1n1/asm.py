@@ -85,7 +85,10 @@ class BaseAsm(object):
         output = self._get(OBJDUMP, f"-zd {self.elffile}")
 
         for line in output.split("\n"):
-            if not line or line[0] != " ":
+            if not line or line.startswith("/"):
+                continue
+            sl = line.split()
+            if not sl or sl[0][-1] != ":":
                 continue
             yield line
 
@@ -96,7 +99,7 @@ class BaseAsm(object):
 
 class ARMAsm(BaseAsm):
     ARCH = os.path.join(os.environ.get("ARCH", "aarch64-linux-gnu-"))
-    CFLAGS = "-pipe -Wall -march=armv8.2-a"
+    CFLAGS = "-pipe -Wall -march=armv8.4-a"
     LDFLAGS = "-maarch64elf"
     HEADER = """
     .text

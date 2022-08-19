@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 from ..fw.agx.initdata import *
+from ..fw.agx.channels import ChannelInfo
 from ..hw.uat import MemoryAttr
 
 def build_iomappings(agx):
@@ -39,25 +40,24 @@ def build_initdata(agx):
 
     initdata = agx.kshared.new(InitData)
 
+    initdata.ver_info = (1, 1, 16, 1)
+
     initdata.regionA = agx.kshared.new_buf(0x4000, "InitData_RegionA").push()
 
     regionB = agx.kobj.new(InitData_RegionB)
 
     regionB.channels = agx.ch_info
 
-    # size 0xc0, empty
-    regionB.unk_170 = agx.kobj.new_buf(0xc0, "RegionB.unkptr_170").push()
+    regionB.stats_ta = agx.kobj.new(InitData_GPUGlobalStatsTA).push()
+    regionB.stats_3d = agx.kobj.new(InitData_GPUGlobalStats3D).push()
 
-    # size: 0x1c0, has random negative 1s, Needed for login screen
-    unk_178 = agx.kobj.new_buf(0x1c0, "RegionB.unkptr_178")
-    unk_178.val = b"\x00" * 0x108 + b"\xff" * 4 + b"\x00" * 0x14 + b"\xff" * 4 + b"\x00" * 0x9c
-    regionB.unk_178 = unk_178
-
-    # size: 0x140, Empty
-    regionB.unk_180 = agx.kobj.new_buf(0x140, "RegionB.unkptr_180").push()
+    # size: 0x180, Empty
+    # 13.0: grew
+    #regionB.stats_cp = agx.kobj.new_buf(0x180, "RegionB.unkptr_180").push()
+    regionB.stats_cp = agx.kobj.new_buf(0x980, "RegionB.unkptr_180").push()
 
     # size: 0x3b80, few floats, few ints, needed for init
-    regionB.hwdata_a = agx.kobj.new(AGXHWDataA).push()
+    regionB.hwdata_a = agx.kobj.new(AGXHWDataA, track=False).push()
 
     # size: 0x80, empty
     regionB.unk_190 = agx.kobj.new_buf(0x80, "RegionB.unkptr_190").push()
@@ -66,10 +66,11 @@ def build_initdata(agx):
     regionB.unk_198 = agx.kobj.new_buf(0xc0, "RegionB.unkptr_198").push()
 
     # size: 0xb80, io stuff
-    hwdata = agx.kobj.new(AGXHWDataB)
+    hwdata = agx.kobj.new(AGXHWDataB, track=False)
     hwdata.io_mappings = build_iomappings(agx)
     hwdata.chip_id = chosen.chip_id
 
+    hwdata.max_pstate = sgx.gpu_num_perf_states
     hwdata.num_pstates = sgx.perf_state_count
     hwdata.min_volt = 850
     # how is this computed?
@@ -99,20 +100,46 @@ def build_initdata(agx):
     regionB.unk_1c8 = agx.kobj.new_buf(0x1000, "RegionB.unkptr_1c8").push()
 
     # Size: 0x4000
-    regionB.unk_214 = agx.kshared2.new_buf(0x4000, "Shared AP=0 region").push()
-    regionB.unkptr_21c = regionB.unk_214._addr
+    regionB.buffer_mgr_ctl = agx.kshared2.new(InitData_BufferMgrCtl).push()
+    regionB.buffer_mgr_ctl_addr2 = regionB.buffer_mgr_ctl._addr
+
+    regionB.unk_6a80 = 0
+    regionB.gpu_idle = 0
+    regionB.unk_6a9c = 0
+    regionB.unk_ctr0 = 0
+    regionB.unk_ctr1 = 0
+    regionB.unk_6aa8 = 0
+    regionB.unk_6aac = 0
+    regionB.unk_ctr2 = 0
+    regionB.unk_6ab4 = 0
+    regionB.unk_6ab8 = 0
+    regionB.unk_6abc = 0
+    regionB.unk_6ac0 = 0
+    regionB.unk_6ac4 = 0
+    regionB.unk_ctr3 = 0
+    regionB.unk_6acc = 0
+    regionB.unk_6ad0 = 0
+    regionB.unk_6ad4 = 0
+    regionB.unk_6ad8 = 0
+    regionB.unk_6adc = 0
+    regionB.unk_6ae0 = 0
+    regionB.unk_6ae4 = 0
+    regionB.unk_6ae8 = 0
+    regionB.unk_6aec = 0
+    regionB.unk_6af0 = 0
+    regionB.unk_ctr4 = 0
+    regionB.unk_ctr5 = 0
+    regionB.unk_6afc = 0
 
     initdata.regionB = regionB.push()
 
-    initdata.regionC = agx.kshared.new(InitData_RegionC).push()
+    initdata.regionC = agx.kshared.new(InitData_RegionC, track=False).push()
 
     #self.regionC_addr = agx.ksharedshared_heap.malloc(0x88000)
 
-    initdata.unkptr_20 = agx.kobj.new(InitData_unkptr20)
-    initdata.unkptr_20.unkptr_0 = agx.kobj.buf(0x40, "initdata.unkptr_20.unkptr_0")
-    # totally guessing the size on this one
-    initdata.unkptr_20.unkptr_8 = agx.kobj.buf(0x40, "initdata.unkptr_20.unkptr_8")
-    initdata.unkptr_20.push()
+    initdata.fw_status = agx.kobj.new(InitData_FWStatus)
+    initdata.fw_status.fwctl_channel = agx.fwctl_chinfo
+    initdata.fw_status.push()
 
     ## This section seems to be data that would be used by firmware side page allocation
     ## But the current firmware doesn't have this functionality enabled, so it's not used?
@@ -129,6 +156,12 @@ def build_initdata(agx):
     # Host handles FW allocations for existing firmware versions
     initdata.host_mapped_fw_allocations = 1
 
+
+    #initdata.regionC.idle_ts = agx.u.mrs("CNTPCT_EL0") + 24000000
+    #initdata.regionC.idle_unk = 0x5b2e8
+    #initdata.regionC.idle_to_off_timeout_ms = 20000
+
+    initdata.regionC.push()
     initdata.push()
 
     #print(initdata.val)

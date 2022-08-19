@@ -25,8 +25,8 @@ class RunCmdQueueMsg(ConstructClass):
         2: "SubmitCompute",
     }
 
-    def __str__(self):
-        s = super().__str__() + "\n"
+    def __str__(self, *args, **kwargs):
+        s = super().__str__(*args, **kwargs) + "\n"
 
         if self.cmdqueue_addr == 0:
             return s + "<Empty RunCmdQueueMsg>"
@@ -45,23 +45,63 @@ class DC_DestroyContext(ConstructClass):
         "unk_14" / Hex(Int32ul),
         "unk_18" / Hex(Int32ul),
         "context_addr" / Hex(Int64ul),
-        "rest" / HexDump(Bytes(0xc))
+        "rest" / HexDump(Default(Bytes(0xc), bytes(0xc)))
     )
 
-class DeviceControl_19(ConstructClass):
+class DC_Write32(ConstructClass):
+    subcon =  Struct (
+        "msg_type" / Const(0x18, Int32ul),
+        "addr" / Hex(Int64ul),
+        "data" / Int32ul,
+        "unk_10" / Int32ul,
+        "unk_14" / Int32ul,
+        "unk_18" / Int32ul,
+        "unk_1c" / Int32ul,
+        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10)))
+    )
+
+class DC_Write32B(ConstructClass):
+    subcon =  Struct (
+        "msg_type" / Const(0x13, Int32ul),
+        "addr" / Hex(Int64ul),
+        "data" / Int32ul,
+        "unk_10" / Int32ul,
+        "unk_14" / Int32ul,
+        "unk_18" / Int32ul,
+        "unk_1c" / Int32ul,
+        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10)))
+    )
+
+class DC_Init(ConstructClass):
     subcon =  Struct (
         "msg_type" / Const(0x19, Int32ul),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c)))
     )
 
+class DC_09(ConstructClass):
+    subcon =  Struct (
+        "msg_type" / Const(0x9, Int32ul),
+        "unk_4" / Int64ul,
+        "unkptr_c" / Int64ul,
+        "unk_14" / Int64ul,
+        "data" /  HexDump(Default(Bytes(0x14), bytes(0x14)))
+    )
 
-class DeviceControl_1e(ConstructClass):
+class DC_Any(ConstructClass):
+    subcon =  Struct (
+        "msg_type" / Int32ul,
+        "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c)))
+    )
+
+class DC_1e(ConstructClass):
     subcon =  Struct (
         "msg_type" / Const(0x1e, Int32ul),
-        "data" / HexDump(Bytes(0x2c)),
-    ),
+        "unk_4" / Int64ul,
+        "unk_c" / Int64ul,
+        "data" /  HexDump(Default(Bytes(0x1c), bytes(0x1c)))
+    )
 
-class DeviceControl_23(ConstructClass):
+class DC_UpdateIdleTS(ConstructClass):
     subcon = Struct (
         "msg_type" / Const(0x23, Int32ul),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
@@ -75,125 +115,156 @@ class UnknownMsg(ConstructClass):
 
 DeviceControlMsg = FixedSized(0x30, Select(
     DC_DestroyContext,
-    DeviceControl_19,
-    DeviceControl_23,
+    DC_Init,
+    DC_UpdateIdleTS,
+    DC_1e,
+    DC_Write32,
     UnknownMsg,
 ))
 
-# Tends to count up
-class StatsMsg_00(ConstructClass):
+class StatsMsg_Power(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x00, Int32ul)),
-        Padding(0x18), # ??? why the hole? never written...
-        "offset" / Hex(Int64ul),
-        Padding(0xc), # Confirmed padding
+        ZPadding(0x18), # ??? why the hole? never written...
+        "power" / Hex(Int64ul),
+        ZPadding(0xc), # Confirmed padding
     )
 
-class StatsMsg_02(ConstructClass):
+    def __str__(self):
+        return f"Power: {self.power / 8192.0:.3f} mW"
+
+class StatsMsg_PowerOn(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x02, Int32ul)),
-        "timestamp" / Hex(Int64ul),
-        "data" / HexDump(Bytes(0x24)),
+        "power_off_ticks" / Dec(Int64ul),
+        ZPadding(0x24), # Confirmed padding
     )
+    def __str__(self):
+        t = self.power_off_ticks / 24000000
+        return f"Power ON: spent {t:.04}s powered off ({self.power_off_ticks} ticks)"
 
-# Related to 00, tends to "reset" the count
-class StatsMsg_03(ConstructClass):
+class StatsMsg_PowerOff(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x03, Int32ul)),
-        "offset" / Hex(Int64ul),
-        Padding(0x24), # Confirmed padding
+        "power_on_ticks" / Dec(Int64ul),
+        ZPadding(0x24), # Confirmed padding
     )
+    def __str__(self):
+        t = self.power_on_ticks / 24000000
+        return f"Power OFF: spent {t:.04}s powered on ({self.power_on_ticks} ticks)"
 
-class StatsMsg_04(ConstructClass):
+class StatsMsg_Util(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x04, Int32ul)),
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
-        "unk2" / Hex(Int32ul),
-        "unk3" / Hex(Int32ul),
-        "offset" / Hex(Int64ul),
-        Padding(0x14), # Confirmed padding
+        "timestamp" / Hex(Int64ul),
+        "util1" / Dec(Int32ul),
+        "util2" / Dec(Int32ul),
+        "util3" / Dec(Int32ul),
+        "util4" / Dec(Int32ul),
+        ZPadding(0x14), # Confirmed padding
     )
+    def __str__(self):
+        return f"Utilization: {self.util1:>3d}% {self.util2:>3d}% {self.util3:>3d}% {self.util4:>3d}%"
 
-class StatsMsg_09(ConstructClass):
+class StatsMsg_AvgPower(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x09, Int32ul)),
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
+        "active_cs" / Dec(Int64ul),
         "unk2" / Hex(Int32ul),
         "unk3" / Hex(Int32ul),
         "unk4" / Hex(Int32ul),
-        "unk5" / Hex(Int32ul),
-        Padding(0x14), # Confirmed padding
+        "avg_power" / Dec(Int32ul),
+        ZPadding(0x14), # Confirmed padding
     )
 
-class StatsMsg_0a(ConstructClass):
+    def __str__(self):
+        return f"Activity: Active {self.active_cs * 10:6d} ms Avg Pwr {self.avg_power:4d} mW ({self.unk2:d} {self.unk3:d} {self.unk4:d})"
+
+class StatsMsg_Temp(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x0a, Int32ul)),
-        Padding(8), # Not written
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
-        "unk2" / Hex(Int32ul),
-        "unk3" / Hex(Int32ul),
-        Padding(0x14), # Confirmed padding
+        ZPadding(8), # Not written
+        "raw_value" / Hex(Int32ul),
+        "scale" / Hex(Int32ul),
+        "tmin" / Hex(Int32ul),
+        "tmax" / Hex(Int32ul),
+        ZPadding(0x14), # Confirmed padding
     )
 
-class StatsMsg_0b(ConstructClass):
+    def __str__(self):
+        temp = self.raw_value / float(self.scale) / 64.0
+        return f"Temp: {temp:.2f}°C s={self.scale:d} tmin={self.tmin:d} tmax={self.tmax:d}"
+
+class StatsMsg_PowerState(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x0b, Int32ul)),
         "timestamp" / Hex(Int64ul),
-        "timestamp2" / Hex(Int64ul),
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
-        "unk2" / Hex(Int32ul),
-        "unk3" / Hex(Int32ul),
-        "unk4" / Hex(Int32ul),
-        "unk5" / Hex(Int32ul),
-        Padding(4), # Confirmed padding
+        "last_busy_ts" / Hex(Int64ul),
+        "active" / Hex(Int32ul),
+        "poweroff" / Dec(Int32ul),
+        "unk2" / Dec(Int32ul),
+        "pstate" / Dec(Int32ul),
+        "unk4" / Dec(Int32ul),
+        "unk5" / Dec(Int32ul),
+        ZPadding(4), # Confirmed padding
     )
 
-class StatsMsg_0c(ConstructClass):
+    def __str__(self):
+        act = "ACT" if self.active else "   "
+        off = "OFF" if self.poweroff else "   "
+
+        return f"PowerState: {act} {off} ps={int(self.pstate)} {self.unk4} {self.unk2} {self.unk5}"
+
+class StatsMsg_FWBusy(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x0c, Int32ul)),
         "timestamp" / Hex(Int64ul),
         "flag" / Int32ul,
-        Padding(0x20), # Confirmed padding
+        ZPadding(0x20), # Confirmed padding
     )
 
-class StatsMsg_0d(ConstructClass):
+    def __str__(self):
+        return f"FW active: {bool(self.flag)}"
+
+class StatsMsg_PState(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x0d, Int32ul)),
-        Padding(8), # Not written
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
-        "unk2" / Hex(Int32ul),
-        "unk3" / Hex(Int32ul),
-        Padding(0x14), # Confirmed padding
+        ZPadding(8), # Not written
+        "ps_min" / Dec(Int32ul),
+        "unk1" / Dec(Int32ul),
+        "ps_max" / Dec(Int32ul),
+        "unk3" / Dec(Int32ul),
+        ZPadding(0x14), # Confirmed padding
     )
+    def __str__(self):
+        return f"PState: {self.ps_min:d}..{self.ps_max:d} ({self.unk1:d}/{self.unk3:d})"
 
-class StatsMsg_0e(ConstructClass):
+class StatsMsg_TempSensor(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(0x0e, Int32ul)),
-        Padding(4), # Not written
-        "unk0" / Hex(Int32ul),
-        "unk1" / Hex(Int32ul),
-        "unk2" / Hex(Int32ul),
-        "unk3" / Hex(Int32ul),
-        "unk4" / Hex(Int32ul),
-        Padding(0x14), # Confirmed padding
+        ZPadding(4), # Not written
+        "sensor_id" / Hex(Int32ul),
+        "raw_value" / Hex(Int32ul),
+        "scale" / Dec(Int32ul),
+        "tmin" / Dec(Int32ul),
+        "tmax" / Dec(Int32ul),
+        ZPadding(0x14), # Confirmed padding
     )
+    def __str__(self):
+        temp = self.raw_value / float(self.scale) / 64.0
+        return f"TempSensor: #{self.sensor_id:d} {temp:.2f}°C s={self.scale:d} tmin={self.tmin:d} tmax={self.tmax:d}"
 
 StatsMsg = FixedSized(0x30, Select(
-    StatsMsg_00,
-    #StatsMsg_02,
-    StatsMsg_03,
-    StatsMsg_04,
-    StatsMsg_09,
-    StatsMsg_0a,
-    StatsMsg_0b,
-    StatsMsg_0c,
-    StatsMsg_0d,
-    StatsMsg_0e,
+    StatsMsg_Power,
+    StatsMsg_PowerOn,
+    StatsMsg_PowerOff,
+    StatsMsg_Util,
+    StatsMsg_AvgPower,
+    StatsMsg_Temp,
+    StatsMsg_PowerState,
+    StatsMsg_FWBusy,
+    StatsMsg_PState,
+    StatsMsg_TempSensor,
     UnknownMsg,
 ))
 
@@ -216,28 +287,37 @@ class FlagMsg(ConstructClass):
         "msg_type" / Hex(Const(1, Int32ul)),
         "firing" / Array(2, Hex(Int64ul)),
         "unk_14" / Hex(Int16ul),
-        Padding(0x38 - 0x16), # confirmed
+        "tail" / Bytes(0x38 - 0x18),
     )
 
-class Fault2Msg(ConstructClass):
+class TimeoutMsg(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Const(4, Int32ul)),
-        "index" / Hex(Int32ul),
+        "counter" / Hex(Int32ul),
         "unk_8" / Hex(Int32ul),
-        "queue" / Hex(Int32ul),
+        "stamp_index" / Hex(Int32sl),
         "unkpad_16" / HexDump(Bytes(0x38 - 0x10)),
     )
 
 EventMsg = FixedSized(0x38, Select(
     FaultMsg,
     FlagMsg,
-    Fault2Msg,
+    TimeoutMsg,
     HexDump(Bytes(0x38)),
 ))
 
 class KTraceMsg(ConstructClass):
     subcon = Struct (
-        "unk" / HexDump(Bytes(0x70)),
+        "unk" / HexDump(Bytes(0x38)),
+    )
+
+class FWCtlMsg(ConstructClass):
+    subcon = Struct (
+        "addr" / Int64ul,
+        "unk_8" / Int32ul,
+        "context_id" / Int32ul,
+        "unk_10" / Int16ul,
+        "unk_12" / Int16ul,
     )
 
 channelNames = [
@@ -246,8 +326,14 @@ channelNames = [
     "TA_2", "3D_2", "CL_2",
     "TA_3", "3D_3", "CL_3",
     "DevCtrl",
-    "Event", "FWLog", "KTrace", "Stats"
+    "Event", "FWLog", "KTrace", "Stats",
+
+    ## Not really in normal order
+    "FWCtl"
 ]
+
+# Exclude FWCtl
+CHANNEL_COUNT = len(channelNames) - 1
 
 channelRings = (
     [[(RunCmdQueueMsg, 0x30, 0x100)]] * 12 + [
@@ -261,8 +347,9 @@ channelRings = (
             (FWLogMsg, 0xd8, 0x100),                # unk 4
             (FWLogMsg, 0xd8, 0x100),                # unk 5
         ],
-        [(KTraceMsg, 0x70, 0x100)],
-        [(StatsMsg, 0x30, 0x100)]
+        [(KTraceMsg, 0x38, 0x200)],
+        [(HexDump(Bytes(0x60)), 0x60, 0x100)],
+        [(FWCtlMsg, 0x14, 0x100)],
     ]
 )
 
@@ -270,8 +357,12 @@ class ChannelStateFields(RegMap):
     READ_PTR = 0x00, Register32
     WRITE_PTR = 0x20, Register32
 
+class FWControlStateFields(RegMap):
+    READ_PTR = 0x00, Register32
+    WRITE_PTR = 0x10, Register32
+
 class Channel(Reloadable):
-    def __init__(self, u, uat, info, ring_defs, base=None):
+    def __init__(self, u, uat, info, ring_defs, base=None, state_fields=ChannelStateFields):
         self.uat = uat
         self.u = u
         self.p = u.proxy
@@ -294,7 +385,7 @@ class Channel(Reloadable):
         for i, (msg, size, count) in enumerate(ring_defs):
             assert msg.sizeof() == size
 
-            self.state.append(ChannelStateFields(self.u, self.state_phys + 0x30 * i))
+            self.state.append(state_fields(self.u, self.state_phys + 0x30 * i))
             m = uat.iotranslate(0, p, size * count)
             self.rb_base.append(p)
             self.rb_maps.append(m)
@@ -331,9 +422,9 @@ class ChannelInfo(ConstructClass):
     )
 
 class ChannelInfoSet(ConstructClass):
-    CHAN_COUNT = len(channelNames)
+    CHAN_COUNT = CHANNEL_COUNT
 
-    subcon = Struct(*[ name / ChannelInfo for name in channelNames])
+    subcon = Struct(*[ name / ChannelInfo for name in channelNames[:CHAN_COUNT]])
 
 __all__.extend(k for k, v in globals().items()
                if (callable(v) or isinstance(v, type)) and v.__module__ == __name__)

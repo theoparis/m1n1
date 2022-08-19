@@ -109,6 +109,7 @@ class HV(Reloadable):
         self.ctx = None
         self.hvcall_handlers = {}
         self.switching_context = False
+        self.show_timestamps = False
 
     def _reloadme(self):
         super()._reloadme()
@@ -129,11 +130,16 @@ class HV(Reloadable):
             if callable(a):
                 self.shell_locals[attr] = getattr(self, attr)
 
+        self.shell_locals["ctx"] = self.context
+
     def log(self, s, *args, show_cpu=True, **kwargs):
         if self.ctx is not None and show_cpu:
-            print(f"[cpu{self.ctx.cpu_id}] " + s, *args, **kwargs)
+            ts=""
+            if self.show_timestamps:
+                ts = f"[{self.u.mrs(CNTPCT_EL0):#x}]"
+            print(ts+f"[cpu{self.ctx.cpu_id}] " + s, *args, **kwargs)
             if self.print_tracer.log_file:
-                print(f"# [cpu{self.ctx.cpu_id}] " + s, *args, file=self.print_tracer.log_file, **kwargs)
+                print(f"# {ts}[cpu{self.ctx.cpu_id}] " + s, *args, file=self.print_tracer.log_file, **kwargs)
         else:
             print(s, *args, **kwargs)
             if self.print_tracer.log_file:
@@ -615,6 +621,13 @@ class HV(Reloadable):
 
         return self.symbols[idx]
 
+    def get_sym(self, addr):
+        a, name = self.sym(addr)
+        if addr == a:
+            return name
+        else:
+            return None
+
     def handle_msr(self, ctx, iss=None):
         if iss is None:
             iss = ctx.esr.ISS
@@ -734,7 +747,7 @@ class HV(Reloadable):
             if far is not None:
                 self.log(f"     FAR={self.addr(far)}")
             if elr_phys:
-                self.u.disassemble_at(elr_phys - 4 * 4, 9 * 4, elr_phys)
+                self.u.disassemble_at(elr_phys - 4 * 4, 9 * 4, elr - 4 * 4, elr, sym=self.get_sym)
             if self.sym(elr)[1] == "com.apple.kernel:_panic_trap_to_debugger":
                 self.log("Panic! Trying to decode panic...")
                 try:
@@ -828,16 +841,33 @@ class HV(Reloadable):
 
         if insn & 0x3b200c00 == 0x38200000:
             page = far_phys & ~0x3fff
-            self.log(f"Unhandled atomic instruction in tracer (FAR={far_phys:#x}), unmapping page at {page:#x}...")
-            self.add_tracer(irange(page, 0x4000), "**auto-bypassed:atomic**", TraceMode.RESERVED)
+
+            before = self.p.read32(far_phys)
             self.map_hw(page, page, 0x4000)
+            r0b = self.ctx.regs[0]
+            self.log(f"-ELR={self.ctx.elr:#x} LR={self.ctx.regs[30]:#x}")
+            self.step()
+            self.log(f"+ELR={self.ctx.elr:#x}")
+            r0a = self.ctx.regs[0]
+            self.dirty_maps.set(irange(page, 0x4000))
+            self.pt_update()
+            after = self.p.read32(far_phys)
+            self.log(f"Unhandled atomic: @{far_phys:#x} {before:#x} -> {after:#x} | r0={r0b:#x} -> {r0a:#x}")
             return True
 
         if insn & 0x3f000000 == 0x08000000:
             page = far_phys & ~0x3fff
-            self.log(f"Unhandled exclusive instruction in tracer (FAR={far_phys:#x}), unmapping page at {page:#x}...")
-            self.add_tracer(irange(page, 0x4000), "**auto-bypassed:excl**", TraceMode.RESERVED)
+            before = self.p.read32(far_phys)
             self.map_hw(page, page, 0x4000)
+            r0b = self.ctx.regs[0]
+            self.log(f"-ELR={self.ctx.elr:#x} LR={self.ctx.regs[30]:#x}")
+            self.step()
+            self.log(f"+ELR={self.ctx.elr:#x}")
+            r0a = self.ctx.regs[0]
+            self.dirty_maps.set(irange(page, 0x4000))
+            self.pt_update()
+            after = self.p.read32(far_phys)
+            self.log(f"Unhandled exclusive: @{far_phys:#x} {before:#x} -> {after:#x} | r0={r0b:#x} -> {r0a:#x}")
             return True
 
     def handle_sync(self, ctx):
@@ -905,7 +935,7 @@ class HV(Reloadable):
                     handled = self.handle_sync(ctx)
                 elif code == EXC.FIQ:
                     self.u.msr(CNTV_CTL_EL0, 0)
-                    self.u.print_context(ctx, False)
+                    self.u.print_context(ctx, False, sym=self.get_sym)
                     handled = True
             elif reason == START.HV:
                 code = HV_EVENT(code)
@@ -926,7 +956,7 @@ class HV(Reloadable):
         else:
             self.log(f"Guest exception: {reason.name}/{code.name}")
             self.update_pac_mask()
-            self.u.print_context(ctx, self.is_fault)
+            self.u.print_context(ctx, self.is_fault, sym=self.get_sym)
 
         if self._sigint_pending or not handled or user_interrupt:
             self._sigint_pending = False
@@ -1129,7 +1159,7 @@ class HV(Reloadable):
         f = f" (orig: #{self.exc_orig_cpu})" if self.ctx.cpu_id != self.exc_orig_cpu else ""
         print(f"  == On CPU #{self.ctx.cpu_id}{f} ==")
         print(f"  Reason: {self.exc_reason.name}/{self.exc_code.name}")
-        self.u.print_context(self.ctx, self.is_fault)
+        self.u.print_context(self.ctx, self.is_fault, sym=self.get_sym)
 
     def bt(self, frame=None, lr=None):
         if frame is None:
@@ -1269,6 +1299,7 @@ class HV(Reloadable):
         hcr.TVM = 0
         hcr.FMO = 1
         hcr.IMO = 0
+        hcr.TTLBOS = 1
         self.u.msr(HCR_EL2, hcr.value)
 
         # Trap dangerous things
@@ -1494,6 +1525,89 @@ class HV(Reloadable):
     def disable_time_stealing(self):
         self.p.hv_set_time_stealing(False)
 
+
+    def load_raw(self, image, entryoffset=0x800):
+        sepfw_start, sepfw_length = self.u.adt["chosen"]["memory-map"].SEPFW
+        tc_start, tc_size = self.u.adt["chosen"]["memory-map"].TrustCache
+        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
+            preoslog_start, preoslog_size = self.u.adt["chosen"]["memory-map"].preoslog
+        else:
+            preoslog_size = 0
+
+        image_size = align(len(image))
+        sepfw_off = image_size
+        image_size += align(sepfw_length)
+        preoslog_off = image_size
+        image_size += preoslog_size
+        self.bootargs_off = image_size
+        bootargs_size = 0x4000
+        image_size += bootargs_size
+
+        print(f"Total region size: 0x{image_size:x} bytes")
+
+        self.phys_base = phys_base = guest_base = self.u.heap_top
+        self.ram_base = self.phys_base & ~0xffffffff
+        self.ram_size = self.u.ba.mem_size_actual
+        guest_base += 16 << 20 # ensure guest starts within a 16MB aligned region of mapped RAM
+        self.adt_base = guest_base
+        guest_base += align(self.u.ba.devtree_size)
+        tc_base = guest_base
+        guest_base += align(tc_size)
+        self.guest_base = guest_base
+        mem_top = self.u.ba.phys_base + self.u.ba.mem_size
+        mem_size = mem_top - phys_base
+
+        print(f"Physical memory: 0x{phys_base:x} .. 0x{mem_top:x}")
+        print(f"Guest region start: 0x{guest_base:x}")
+        
+        self.entry = guest_base + entryoffset
+
+        print(f"Mapping guest physical memory...")
+        self.add_tracer(irange(self.ram_base, self.u.ba.phys_base - self.ram_base), "RAM-LOW", TraceMode.OFF)
+        self.add_tracer(irange(phys_base, self.u.ba.mem_size_actual - phys_base + self.ram_base), "RAM-HIGH", TraceMode.OFF)
+        self.unmap_carveouts()
+
+        print(f"Loading kernel image (0x{len(image):x} bytes)...")
+        self.u.compressed_writemem(guest_base, image, True)
+        self.p.dc_cvau(guest_base, len(image))
+        self.p.ic_ivau(guest_base, len(image))
+
+        print(f"Copying SEPFW (0x{sepfw_length:x} bytes)...")
+        self.p.memcpy8(guest_base + sepfw_off, sepfw_start, sepfw_length)
+
+        print(f"Copying TrustCache (0x{tc_size:x} bytes)...")
+        self.p.memcpy8(tc_base, tc_start, tc_size)
+
+        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
+            print(f"Copying preoslog (0x{preoslog_size:x} bytes)...")
+            self.p.memcpy8(guest_base + preoslog_off, preoslog_start, preoslog_size)
+
+        print(f"Adjusting addresses in ADT...")
+        self.adt["chosen"]["memory-map"].SEPFW = (guest_base + sepfw_off, sepfw_length)
+        self.adt["chosen"]["memory-map"].TrustCache = (tc_base, tc_size)
+        self.adt["chosen"]["memory-map"].DeviceTree = (self.adt_base, align(self.u.ba.devtree_size))
+        self.adt["chosen"]["memory-map"].BootArgs = (guest_base + self.bootargs_off, bootargs_size)
+        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
+            self.adt["chosen"]["memory-map"].preoslog = (guest_base + preoslog_off, preoslog_size)
+
+        print(f"Setting up bootargs at 0x{guest_base + self.bootargs_off:x}...")
+
+        self.tba.mem_size = mem_size
+        self.tba.phys_base = phys_base
+        self.tba.virt_base = 0xfffffe0010000000 + (phys_base & (32 * 1024 * 1024 - 1))
+        self.tba.devtree = self.adt_base - phys_base + self.tba.virt_base
+        self.tba.top_of_kernel_data = guest_base + image_size
+
+        self.iface.writemem(guest_base + self.bootargs_off, BootArgs.build(self.tba))
+
+        print("Setting secondary CPU RVBARs...")
+        rvbar = self.entry & ~0xfff
+        for cpu in self.adt["cpus"][1:]:
+            addr, size = cpu.cpu_impl_reg
+            print(f"  {cpu.name}: [0x{addr:x}] = 0x{rvbar:x}")
+            self.p.write64(addr, rvbar)
+
+
     def load_macho(self, data, symfile=None):
         if isinstance(data, str):
             data = open(data, "rb")
@@ -1539,87 +1653,8 @@ class HV(Reloadable):
 
         #image = macho.prepare_image(load_hook)
         image = macho.prepare_image()
-        sepfw_start, sepfw_length = self.u.adt["chosen"]["memory-map"].SEPFW
-        tc_start, tc_size = self.u.adt["chosen"]["memory-map"].TrustCache
-        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
-            preoslog_start, preoslog_size = self.u.adt["chosen"]["memory-map"].preoslog
-        else:
-            preoslog_size = 0
+        self.load_raw(image, entryoffset=(macho.entry - macho.vmin))
 
-        image_size = align(len(image))
-        sepfw_off = image_size
-        image_size += align(sepfw_length)
-        preoslog_off = image_size
-        image_size += preoslog_size
-        self.bootargs_off = image_size
-        bootargs_size = 0x4000
-        image_size += bootargs_size
-
-        print(f"Total region size: 0x{image_size:x} bytes")
-
-        self.phys_base = phys_base = guest_base = self.u.heap_top
-        self.ram_base = self.phys_base & ~0xffffffff
-        self.ram_size = self.u.ba.mem_size_actual
-        guest_base += 16 << 20 # ensure guest starts within a 16MB aligned region of mapped RAM
-        self.adt_base = guest_base
-        guest_base += align(self.u.ba.devtree_size)
-        tc_base = guest_base
-        guest_base += align(tc_size)
-        self.guest_base = guest_base
-        mem_top = self.u.ba.phys_base + self.u.ba.mem_size
-        mem_size = mem_top - phys_base
-
-        print(f"Physical memory: 0x{phys_base:x} .. 0x{mem_top:x}")
-        print(f"Guest region start: 0x{guest_base:x}")
-
-        self.entry = macho.entry - macho.vmin + guest_base
-
-        print(f"Mapping guest physical memory...")
-        self.add_tracer(irange(self.ram_base, self.u.ba.phys_base - self.ram_base), "RAM-LOW", TraceMode.OFF)
-        self.add_tracer(irange(phys_base, self.u.ba.mem_size_actual - phys_base + self.ram_base), "RAM-HIGH", TraceMode.OFF)
-        self.unmap_carveouts()
-
-        print(f"Loading kernel image (0x{len(image):x} bytes)...")
-        self.u.compressed_writemem(guest_base, image, True)
-        self.p.dc_cvau(guest_base, len(image))
-        self.p.ic_ivau(guest_base, len(image))
-
-        print(f"Copying SEPFW (0x{sepfw_length:x} bytes)...")
-        self.p.memcpy8(guest_base + sepfw_off, sepfw_start, sepfw_length)
-
-        print(f"Copying TrustCache (0x{tc_size:x} bytes)...")
-        self.p.memcpy8(tc_base, tc_start, tc_size)
-
-        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
-            print(f"Copying preoslog (0x{preoslog_size:x} bytes)...")
-            self.p.memcpy8(guest_base + preoslog_off, preoslog_start, preoslog_size)
-
-        print(f"Adjusting addresses in ADT...")
-        self.adt["chosen"]["memory-map"].SEPFW = (guest_base + sepfw_off, sepfw_length)
-        self.adt["chosen"]["memory-map"].TrustCache = (tc_base, tc_size)
-        self.adt["chosen"]["memory-map"].DeviceTree = (self.adt_base, align(self.u.ba.devtree_size))
-        self.adt["chosen"]["memory-map"].BootArgs = (guest_base + self.bootargs_off, bootargs_size)
-        if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
-            self.adt["chosen"]["memory-map"].preoslog = (guest_base + preoslog_off, preoslog_size)
-
-        print(f"Setting up bootargs at 0x{guest_base + self.bootargs_off:x}...")
-
-        self.tba.mem_size = mem_size
-        self.tba.phys_base = phys_base
-        self.tba.virt_base = 0xfffffe0010000000 + (phys_base & (32 * 1024 * 1024 - 1))
-        self.tba.devtree = self.adt_base - phys_base + self.tba.virt_base
-        self.tba.top_of_kernel_data = guest_base + image_size
-
-        self.sym_offset = macho.vmin - guest_base + self.tba.phys_base - self.tba.virt_base
-
-        self.iface.writemem(guest_base + self.bootargs_off, BootArgs.build(self.tba))
-
-        print("Setting secondary CPU RVBARs...")
-        rvbar = self.entry & ~0xfff
-        for cpu in self.adt["cpus"][1:]:
-            addr, size = cpu.cpu_impl_reg
-            print(f"  {cpu.name}: [0x{addr:x}] = 0x{rvbar:x}")
-            self.p.write64(addr, rvbar)
 
     def update_pac_mask(self):
         tcr = TCR(self.u.mrs(TCR_EL12))

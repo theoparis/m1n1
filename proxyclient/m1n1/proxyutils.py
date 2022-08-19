@@ -5,7 +5,7 @@ from construct import *
 
 from .asm import ARMAsm
 from .proxy import *
-from .utils import Reloadable, _ascii
+from .utils import Reloadable, chexdiff32
 from .tgtypes import *
 from .sysreg import *
 from .malloc import Heap
@@ -18,6 +18,15 @@ SIMD_H = Array(32, Array(8, Int16ul))
 SIMD_S = Array(32, Array(4, Int32ul))
 SIMD_D = Array(32, Array(2, Int64ul))
 SIMD_Q = Array(32, BytesInteger(16, swapped=True))
+
+# This isn't perfect, since multiple versions could have the same
+# iBoot version, but it's good enough
+VERSION_MAP = {
+    "iBoot-7429.61.2": "12.1",
+    "iBoot-7459.101.2": "12.3",
+    "iBoot-7459.101.3": "12.4",
+    "iBoot-8419.0.151.0.1": "13.0 beta4",
+}
 
 class ProxyUtils(Reloadable):
     CODE_BUFFER_SIZE = 0x10000
@@ -61,6 +70,8 @@ class ProxyUtils(Reloadable):
         self.simd = None
 
         self.mmu_off = False
+
+        self.inst_cache = {}
 
         self.exec_modes = {
             None: (self.proxy.call, REGION_RX_EL1),
@@ -117,8 +128,8 @@ class ProxyUtils(Reloadable):
         '''read system register reg'''
         op0, op1, CRn, CRm, op2 = sysreg_parse(reg)
 
-        op =  (((op0 & 1) << 19) | (op1 << 16) | (CRn << 12) |
-               (CRm << 8) | (op2 << 5) | 0xd5300000)
+        op =  ((op0 << 19) | (op1 << 16) | (CRn << 12) |
+               (CRm << 8) | (op2 << 5) | 0xd5200000)
 
         return self.exec(op, call=call, silent=silent)
 
@@ -126,10 +137,13 @@ class ProxyUtils(Reloadable):
         '''Write val to system register reg'''
         op0, op1, CRn, CRm, op2 = sysreg_parse(reg)
 
-        op =  (((op0 & 1) << 19) | (op1 << 16) | (CRn << 12) |
-               (CRm << 8) | (op2 << 5) | 0xd5100000)
+        op =  ((op0 << 19) | (op1 << 16) | (CRn << 12) |
+               (CRm << 8) | (op2 << 5) | 0xd5000000)
 
         self.exec(op, val, call=call, silent=silent)
+
+    sys = msr
+    sysl = mrs
 
     def exec(self, op, r0=0, r1=0, r2=0, r3=0, *, silent=False, call=None, ignore_exceptions=False):
         if callable(call):
@@ -138,7 +152,10 @@ class ProxyUtils(Reloadable):
             call, region = call
         else:
             call, region = self.exec_modes[call]
-        if isinstance(op, tuple) or isinstance(op, list):
+
+        if op in self.inst_cache:
+            func = self.inst_cache[op]
+        elif isinstance(op, tuple) or isinstance(op, list):
             func = struct.pack(f"<{len(op)}II", *op, 0xd65f03c0) # ret
         elif isinstance(op, int):
             func = struct.pack("<II", op, 0xd65f03c0) # ret
@@ -152,6 +169,8 @@ class ProxyUtils(Reloadable):
 
         if self.mmu_off:
             region = 0
+
+        self.inst_cache[op] = func
 
         assert len(func) < self.CODE_BUFFER_SIZE
         self.iface.writemem(self.code_buffer, func)
@@ -176,7 +195,7 @@ class ProxyUtils(Reloadable):
         if not len(data):
             return
 
-        payload = gzip.compress(data, compresslevel=2)
+        payload = gzip.compress(data, compresslevel=1)
         compressed_size = len(payload)
 
         with self.heap.guarded_malloc(compressed_size) as compressed_addr:
@@ -206,21 +225,30 @@ class ProxyUtils(Reloadable):
         print(f"Pushing ADT ({adt_size} bytes)...")
         self.iface.writemem(adt_base, self.adt_data)
 
-    def disassemble_at(self, start, size, pc=None):
+    def disassemble_at(self, start, size, pc=None, vstart=None, sym=None):
         '''disassemble len bytes of memory from start
          optional pc address will mark that line with a '*' '''
         code = struct.unpack(f"<{size // 4}I", self.iface.readmem(start, size))
+        if vstart is None:
+            vstart = start
 
-        c = ARMAsm(".inst " + ",".join(str(i) for i in code), start)
-        lines = list(c.disassemble())
-        if pc is not None:
-            idx = (pc - start) // 4
+        c = ARMAsm(".inst " + ",".join(str(i) for i in code), vstart)
+        lines = list()
+        for line in c.disassemble():
+            sl = line.split()
             try:
-                lines[idx] = " *" + lines[idx][2:]
-            except IndexError:
-                pass
-        for i in lines:
-            print(" " + i)
+                addr = int(sl[0].rstrip(":"), 16)
+            except:
+                addr = None
+            if pc == addr:
+                line = " *" + line
+            else:
+                line = "  " + line
+            if sym:
+                if s := sym(addr):
+                    print()
+                    print(f"{' '*len(sl[0])}   {s}:")
+            print(line)
 
     def print_l2c_regs(self):
         print()
@@ -234,7 +262,7 @@ class ProxyUtils(Reloadable):
         self.msr(L2C_ERR_STS_EL1, l2c_err_sts) # Clear the flag bits
         self.msr(DAIF, self.mrs(DAIF) | 0x100) # Re-enable SError exceptions
 
-    def print_context(self, ctx, is_fault=True, addr=lambda a: f"0x{a:x}"):
+    def print_context(self, ctx, is_fault=True, addr=lambda a: f"0x{a:x}", sym=None, num_ctx=9):
         print(f"  == Exception taken from {ctx.spsr.M.name} ==")
         el = ctx.spsr.M >> 2
         print(f"  SPSR   = {ctx.spsr}")
@@ -252,7 +280,9 @@ class ProxyUtils(Reloadable):
             print()
             print("  == Code context ==")
 
-            self.disassemble_at(ctx.elr_phys - 4 * 4, 9 * 4, ctx.elr_phys)
+            off = -(num_ctx // 2)
+
+            self.disassemble_at(ctx.elr_phys + 4 * off, num_ctx * 4, ctx.elr, ctx.elr + 4 * off, sym=sym)
 
         if is_fault:
             if ctx.esr.EC == ESR_EC.MSR or ctx.esr.EC == ESR_EC.IMPDEF and ctx.esr.ISS == 0x20:
@@ -333,6 +363,19 @@ class ProxyUtils(Reloadable):
     def q(self):
         return self.get_simd(SIMD_Q)
 
+    def get_version(self, v):
+        if isinstance(v, bytes):
+            v = v.split(b"\0")[0].decode("ascii")
+        return VERSION_MAP.get(v, None)
+
+    @property
+    def version(self):
+        return self.get_version(self.adt["/chosen"].firmware_version)
+
+    @property
+    def sfr_version(self):
+        return self.get_version(self.adt["/chosen"].system_firmware_version)
+
 class LazyADT:
     def __init__(self, utils):
         self.__dict__["_utils"] = utils
@@ -407,50 +450,15 @@ class RegMonitor(Reloadable):
                 continue
 
             words = struct.unpack("<%dI" % count, block)
-            cur.append(words)
-            if last == words:
+            cur.append(block)
+            if last == block:
                 continue
-            out = []
             if name:
-                out.append(f"# {name} ({start:#x}..{start + size - 1:#x})\n")
+                header = f"# {name} ({start:#x}..{start + size - 1:#x})\n"
             else:
-                out.append(f"# ({start:#x}..{start + size - 1:#x})\n")
-            row = 8
-            skipping = False
-            for i in range(0, count, row):
-                if not last:
-                    if i != 0 and words[i:i+row] == words[i-row:i]:
-                        if not skipping:
-                            out.append("%016x *\n" % (offset + i * 4))
-                        skipping = True
-                    else:
-                        out.append("%016x " % (offset + i * 4))
-                        for new in words[i:i+row]:
-                            out.append("%08x " % new)
-                        if self.ascii:
-                            out.append("| " + _ascii(block[4*i:4*(i+row)]))
-                        out.append("\n")
-                        skipping = False
-                elif last[i:i+row] != words[i:i+row]:
-                    out.append("%016x " % (offset + i * 4))
-                    for old, new in zip(last[i:i+row], words[i:i+row]):
-                        so = "%08x" % old
-                        sn = s = "%08x" % new
-                        if old != new:
-                            s = "\x1b[32m"
-                            ld = False
-                            for a,b in zip(so, sn):
-                                d = a != b
-                                if ld != d:
-                                    s += "\x1b[31;1;4m" if d else "\x1b[32m"
-                                    ld = d
-                                s += b
-                            s += "\x1b[m"
-                        out.append(s + " ")
-                    if self.ascii:
-                        out.append("| " + _ascii(block[4*i:4*(i+row)]))
-                    out.append("\n")
-            self.log("".join(out))
+                header = f"# ({start:#x}..{start + size - 1:#x})\n"
+
+            self.log(header + chexdiff32(last, block, offset=offset))
         self.last = cur
 
 class GuardedHeap:

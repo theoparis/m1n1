@@ -4,13 +4,15 @@ import textwrap
 from .asc import *
 from ..hw.uat import UAT, MemoryAttr, PTE, Page_PTE, TTBR
 
-from ..fw.agx.initdata import InitData as NewInitData
+from ..fw.agx.initdata import InitData
 from ..fw.agx.channels import *
 from ..fw.agx.cmdqueue import *
 from ..fw.agx.microsequence import *
+from ..fw.agx.handoff import *
 
 from m1n1.proxyutils import RegMonitor
 from m1n1.constructutils import *
+from m1n1.trace import Tracer
 
 from construct import *
 
@@ -60,12 +62,23 @@ class KickEp(EP):
     @msg(0x83, DIR.TX, KickMsg)
     def kick(self, msg):
         if self.tracer.state.active:
-            self.log(f"  Kick {msg.KICK:x}")
+            self.log(f"  Kick {msg}")
         self.tracer.kick(msg.KICK)
 
         return True
 
+    @msg(0x84, DIR.TX, KickMsg)
+    def fwkick(self, msg):
+        if self.tracer.state.active:
+            self.log(f"  FWRing Kick {msg}")
+        self.tracer.fwkick(msg.KICK)
+        return True
+
 class ChannelTracer(Reloadable):
+    STATE_FIELDS = ChannelStateFields
+    WPTR = 0x20
+    RPTR = 0x00
+
     def __init__(self, tracer, info, index):
         self.tracer = tracer
         self.uat = tracer.uat
@@ -90,7 +103,8 @@ class ChannelTracer(Reloadable):
         if self.name == "FWLog":
             base = self.tracer.state.fwlog_ring2
 
-        self.channel = Channel(self.u, self.uat, self.info, channelRings[index], base=base)
+        self.channel = Channel(self.u, self.uat, self.info, channelRings[index], base=base,
+                               state_fields=self.STATE_FIELDS)
         for addr, size in self.channel.st_maps:
             self.log(f"st_map {addr:#x} ({size:#x})")
         for i in range(self.ring_count):
@@ -106,11 +120,11 @@ class ChannelTracer(Reloadable):
 
         msgcls, size, count = self.channel.ring_defs[ring]
 
-        if off == 0x20:
+        if off == self.WPTR:
             if self.verbose:
                 self.log(f"RD [{evt.addr:#x}] WPTR[{ring}] = {evt.data:#x}")
             self.poll_ring(ring)
-        elif off == 0x00:
+        elif off == self.RPTR:
             if self.verbose:
                 self.log(f"RD [{evt.addr:#x}] RPTR[{ring}] = {evt.data:#x}")
             self.poll_ring(ring)
@@ -125,11 +139,11 @@ class ChannelTracer(Reloadable):
 
         msgcls, size, count = self.channel.ring_defs[ring]
 
-        if off == 0x20:
+        if off == self.WPTR:
             if self.verbose:
                 self.log(f"WR [{evt.addr:#x}] WPTR[{ring}] = {evt.data:#x}")
             self.poll_ring(ring)
-        elif off == 0x00:
+        elif off == self.RPTR:
             if self.verbose:
                 self.log(f"WR [{evt.addr:#x}] RPTR[{ring}] = {evt.data:#x}")
             self.poll_ring(ring)
@@ -152,6 +166,8 @@ class ChannelTracer(Reloadable):
 
         cur = self.state.tail[ring]
         tail = self.channel.state[ring].WRITE_PTR.val
+        if tail >= count:
+            raise Exception(f"Message index {tail:#x} >= {count:#x}")
         if cur != tail:
             #self.log(f"{cur:#x} -> {tail:#x}")
             while cur != tail:
@@ -170,12 +186,12 @@ class ChannelTracer(Reloadable):
                     self.state.tail[ring] = self.channel.state[ring].WRITE_PTR.val
 
             for base in range(0, 0x30 * self.ring_count, 0x30):
-                self.hv.add_tracer(irange(self.channel.state_phys + base + 0x00, 4),
+                self.hv.add_tracer(irange(self.channel.state_phys + base + self.RPTR, 4),
                                    f"ChannelTracer/{self.name}",
                                    mode=TraceMode.SYNC,
                                    read=self.state_read,
                                    write=self.state_write)
-                self.hv.add_tracer(irange(self.channel.state_phys + base + 0x20, 4),
+                self.hv.add_tracer(irange(self.channel.state_phys + base + self.WPTR, 4),
                                    f"ChannelTracer/{self.name}",
                                    mode=TraceMode.SYNC,
                                    read=self.state_read,
@@ -186,6 +202,11 @@ class ChannelTracer(Reloadable):
 
 ChannelTracer = ChannelTracer._reloadcls()
 CommandQueueInfo = CommandQueueInfo._reloadcls()
+
+class FWCtlChannelTracer(ChannelTracer):
+    STATE_FIELDS = FWControlStateFields
+    WPTR = 0x10
+    RPTR = 0x00
 
 class CommandQueueTracer(Reloadable):
     def __init__(self, tracer, info_addr):
@@ -235,10 +256,10 @@ class CommandQueueTracer(Reloadable):
         count = 0
         orig_rptr = rptr = self.state.rptr
         while rptr != workmsg.head:
-            self.log(f"WI item @{rptr:#x}")
             count += 1
             stream.seek(self.info.rb_addr + rptr * 8, 0)
             pointer = Int64ul.parse_stream(stream)
+            self.log(f"WI item @{rptr:#x}: {pointer:#x}")
             if pointer:
                 stream.seek(pointer, 0)
                 yield CmdBufWork.parse_stream(stream)
@@ -255,7 +276,18 @@ class CommandQueueTracer(Reloadable):
 
 CmdBufWork = CmdBufWork._reloadcls()
 CommandQueueTracer = CommandQueueTracer._reloadcls()
-NewInitData = NewInitData._reloadcls(True)
+InitData = InitData._reloadcls(True)
+
+class HandoffTracer(Tracer):
+    DEFAULT_MODE = TraceMode.SYNC
+
+    def __init__(self, hv, agx_tracer, base, verbose=False):
+        super().__init__(hv, verbose=verbose)
+        self.agx_tracer = agx_tracer
+        self.base = base
+
+    def start(self):
+        self.trace_regmap(self.base, 0x4000, GFXHandoffStruct, name="regs")
 
 class AGXTracer(ASCTracer):
     ENDPOINTS = {
@@ -278,12 +310,22 @@ class AGXTracer(ASCTracer):
         self.gfx_handoff = getattr(self.dev_sgx, "gfx-handoff-base")
         self.gfx_handoff_size = getattr(self.dev_sgx, "gfx-handoff-size")
 
+        self.handoff_tracer = HandoffTracer(hv, self, self.gfx_handoff, verbose=2)
+
         self.ignorelist = []
         self.last_msg = None
 
         # self.mon.add(self.gpu_region, self.gpu_region_size, "contexts")
         # self.mon.add(self.gfx_shared_region, self.gfx_shared_region_size, "gfx-shared")
         # self.mon.add(self.gfx_handoff, self.gfx_handoff_size, "gfx-handoff")
+
+        self.trace_kernva = False
+        self.trace_userva = False
+        self.trace_usermap = True
+        self.pause_after_init = False
+        self.shell_after_init = False
+        self.encoder_id_filter = None
+        self.redump = False
 
         self.clear_ttbr_tracers()
         self.clear_uatmap_tracers()
@@ -299,15 +341,10 @@ class AGXTracer(ASCTracer):
         self.last_ta = None
         self.last_3d = None
 
-        self.trace_userva = False
-        self.pause_after_init = False
-        self.shell_after_init = False
-        self.encoder_id_filter = None
-
         self.add_mon_regions()
 
-    def get_cmdqueue(self, info_addr):
-        if info_addr in self.cmdqueues:
+    def get_cmdqueue(self, info_addr, new_queue):
+        if info_addr in self.cmdqueues and not new_queue:
             return self.cmdqueues[info_addr]
 
         cmdqueue = CommandQueueTracer(self, info_addr)
@@ -343,6 +380,8 @@ class AGXTracer(ASCTracer):
 
         def trace_pt(start, end, idx, pte, level, sparse):
             if start >= 0xf8000000000 and ctx != 0:
+                return
+            if start < 0xf8000000000 and not self.trace_usermap:
                 return
             self.hv.add_tracer(irange(pte.offset(), 0x4000),
                             f"UATMapTracer/{ctx}",
@@ -434,10 +473,8 @@ class AGXTracer(ASCTracer):
     def uat_page_mapped(self, iova, pte, ctx=0):
         if iova >= 0xf8000000000 and ctx != 0:
             return
-        if not self.trace_userva and ctx != 0:
-            return
-
         if not pte.valid():
+            self.log(f"UAT unmap {ctx}:{iova:#x} ({pte})")
             try:
                 paddr = self.va_to_pa[(ctx, iova)]
             except KeyError:
@@ -447,9 +484,15 @@ class AGXTracer(ASCTracer):
             return
 
         paddr = pte.offset()
-        self.log(f"UAT map {ctx}:{iova:#x} -> {paddr:#x}")
+        self.log(f"UAT map {ctx}:{iova:#x} -> {paddr:#x} ({pte})")
         if paddr < 0x800000000:
             return # MMIO, ignore
+
+        if not self.trace_userva and ctx != 0 and iova < 0x6f_00000000:
+            return
+        if not self.trace_kernva and ctx == 0:
+            return
+
         self.va_to_pa[(ctx, iova)] = paddr
         self.hv.add_tracer(irange(paddr, 0x4000),
                            f"GPUVM/{ctx}",
@@ -503,6 +546,7 @@ class AGXTracer(ASCTracer):
 
     def start(self):
         super().start()
+        self.handoff_tracer.start()
         self.init_channels()
         if self.state.active:
             self.resume()
@@ -511,6 +555,7 @@ class AGXTracer(ASCTracer):
 
     def stop(self):
         self.pause()
+        self.handoff_tracer.stop()
         super().stop()
 
     def mon_addva(self, ctx, va, size, name=""):
@@ -523,7 +568,7 @@ class AGXTracer(ASCTracer):
             return
         elif isinstance(msg, RunCmdQueueMsg):
             self.log(f"== Work notification (type {msg.queue_type})==")
-            queue = self.get_cmdqueue(msg.cmdqueue_addr)
+            queue = self.get_cmdqueue(msg.cmdqueue_addr, msg.new_queue)
             work_items = list(queue.get_workitems(msg))
             if self.encoder_id_filter is not None:
                 for wi in work_items:
@@ -549,7 +594,7 @@ class AGXTracer(ASCTracer):
         return True
 
     def handle_event(self, msg):
-        if self.last_ta:
+        if self.last_ta and self.redump:
             self.log("Redumping TA...")
             stream = self.get_stream(0, self.last_ta._addr)
             last_ta = CmdBufWork.parse_stream(stream)
@@ -558,7 +603,7 @@ class AGXTracer(ASCTracer):
             self.queue_ta.update_info()
             self.log(f"Queue info: {self.queue_ta.info}")
             self.last_ta = None
-        if self.last_3d:
+        if self.last_3d and self.redump:
             self.log("Redumping 3D...")
             stream = self.get_stream(0, self.last_3d._addr)
             last_3d = CmdBufWork.parse_stream(stream)
@@ -576,8 +621,8 @@ class AGXTracer(ASCTracer):
             self.log(f"    block_list @ {buffer_mgr.block_list_addr:#x}:")
             chexdump(read(buffer_mgr.block_list_addr,
                           0x8000), print_fn=self.log)
-            self.log(f"    unkptr_d8 @ {buffer_mgr.unkptr_d8:#x}:")
-            chexdump(read(buffer_mgr.unkptr_d8, 0x4000), print_fn=self.log)
+            #self.log(f"    unkptr_d8 @ {buffer_mgr.unkptr_d8:#x}:")
+            #chexdump(read(buffer_mgr.unkptr_d8, 0x4000), print_fn=self.log)
 
 
     def handle_ta(self, wi):
@@ -612,8 +657,8 @@ class AGXTracer(ASCTracer):
             #self.log(f"  unkptr_60 @ {wi0.unkptr_60:#x}:")
             #chexdump(read(wi0.unkptr_60, 0x4000), print_fn=self.log)
 
-            self.log(f"  unkptr_45c @ {wi0.unkptr_45c:#x}:")
-            chexdump(read(wi0.unkptr_45c, 0x1800), print_fn=self.log)
+            #self.log(f"  unkptr_45c @ {wi0.unkptr_45c:#x}:")
+            #chexdump(read(wi0.unkptr_45c, 0x1800), print_fn=self.log)
 
             for i in wi0.microsequence.value:
                 i = i.cmd
@@ -621,7 +666,7 @@ class AGXTracer(ASCTracer):
                     self.log(f"  # StartTACmd")
                     self.log(f"    buf_thing @ {i.buf_thing_addr:#x}: {i.buf_thing!s}")
                     self.log(f"      unkptr_18 @ {i.buf_thing.unkptr_18:#x}:")
-                    chexdump(read(i.buf_thing.unkptr_18, 0x1000), print_fn=self.log)
+                    chexdump(read(i.buf_thing.unkptr_18, 0x100), print_fn=self.log)
                     self.log(f"    unkptr_24 @ {i.unkptr_24:#x}:")
                     chexdump(read(i.unkptr_24, 0x100), print_fn=self.log)
                     self.log(f"    unk_5c @ {i.unkptr_5c:#x}:")
@@ -634,7 +679,10 @@ class AGXTracer(ASCTracer):
             #self.uat.dump(context, self.log)
 
     def handle_3d(self, wi):
-        self.log(f"Got 3D WI{wi.cmd.magic:d}")
+        self.log(f"Got 3D WI{wi.cmdid:d}")
+        if wi.cmdid != 1:
+            return
+
         self.last_3d = wi
 
         def kread(off, size):
@@ -664,17 +712,17 @@ class AGXTracer(ASCTracer):
                 #chexdump(read(cmd3d.struct2.tvb_tilemap_addr, 0x1000), print_fn=self.log)
             #self.log(f"    aux_fb_ptr @ {cmd3d.struct2.aux_fb_ptr:#x}:")
             #chexdump(read(cmd3d.struct2.aux_fb_ptr, 0x100), print_fn=self.log)
-            self.log(f"    pipeline_base @ {cmd3d.struct2.pipeline_base:#x}:")
-            chexdump(read(cmd3d.struct2.pipeline_base, 0x100), print_fn=self.log)
+            #self.log(f"    pipeline_base @ {cmd3d.struct2.pipeline_base:#x}:")
+            #chexdump(read(cmd3d.struct2.pipeline_base, 0x100), print_fn=self.log)
 
             self.log(f"  buf_thing @ {cmd3d.buf_thing_addr:#x}: {cmd3d.buf_thing!s}")
-            self.log(f"    unkptr_18 @ {cmd3d.buf_thing.unkptr_18:#x}:")
-            chexdump(read(cmd3d.buf_thing.unkptr_18, 0x1000), print_fn=self.log)
+            #self.log(f"    unkptr_18 @ {cmd3d.buf_thing.unkptr_18:#x}:")
+            #chexdump(read(cmd3d.buf_thing.unkptr_18, 0x1000), print_fn=self.log)
 
-            self.log(f"  unk_24 @ {cmd3d.unkptr_24:#x}: {cmd3d.unk_24!s}")
+            #self.log(f"  unk_24 @ {cmd3d.unkptr_24:#x}: {cmd3d.unk_24!s}")
             self.log(f"  struct6 @ {cmd3d.struct6_addr:#x}: {cmd3d.struct6!s}")
-            self.log(f"    unknown_buffer @ {cmd3d.struct6.unknown_buffer:#x}:")
-            chexdump(read(cmd3d.struct6.unknown_buffer, 0x1000), print_fn=self.log)
+            #self.log(f"    unknown_buffer @ {cmd3d.struct6.unknown_buffer:#x}:")
+            #chexdump(read(cmd3d.struct6.unknown_buffer, 0x1000), print_fn=self.log)
             self.log(f"  struct7 @ {cmd3d.struct7_addr:#x}: {cmd3d.struct7!s}")
             self.log(f"  unk_buf_ptr @ {cmd3d.unk_buf_ptr:#x}:")
             chexdump(kread(cmd3d.unk_buf_ptr, 0x11c), print_fn=self.log)
@@ -825,6 +873,24 @@ class AGXTracer(ASCTracer):
         for chan in self.channels[13:]:
             chan.poll()
 
+    def fwkick(self, val):
+        if not self.state.active:
+            return
+
+        self.log(f"FW Kick~! {val:#x}")
+        self.mon.poll()
+
+        if val == 0x00: # Kick FW control
+            channel = len(self.channels) - 1
+        else:
+            raise(Exception("Unknown kick type"))
+
+        self.channels[channel].poll()
+
+        # check the gfx -> cpu channels
+        for chan in self.channels[13:]:
+            chan.poll()
+
     def pong(self):
         if not self.state.active:
             return
@@ -893,9 +959,12 @@ class AGXTracer(ASCTracer):
             return
         #self.channels = []
         for i, chan_info in enumerate(self.state.channel_info):
-            if i == 16:
-                continue
-            channel_chan = ChannelTracer(self, chan_info, i)
+            #if channelNames[i] == "Stats": # ignore stats
+                #continue
+            if channelNames[i] == "FWCtl": # ignore stats
+                channel_chan = FWCtlChannelTracer(self, chan_info, i)
+            else:
+                channel_chan = ChannelTracer(self, chan_info, i)
             self.channels.append(channel_chan)
             #for i, (msg, size, count) in enumerate(channel_chan.channel.ring_defs):
             #    self.mon_addva(0, chan_info.state_addr + i * 0x30, 0x30, f"chan[{channel_chan.name}]->state[{i}]")
@@ -928,26 +997,29 @@ class AGXTracer(ASCTracer):
         self.log("Resuming tracing")
         self.state.active = True
         for chan in self.channels:
+            if chan.name == "Stats":
+                continue
             chan.set_active(True)
         for queue in self.cmdqueues.values():
             queue.set_active(True)
         self.trace_uatrange(0, self.state.initdata.regionA_addr, 0x4000, name="regionA")
         self.trace_uatrange(0, self.state.initdata.regionB_addr, 0x6bc0, name="regionB")
         self.trace_uatrange(0, self.state.initdata.regionC_addr, 0x11d40, name="regionC")
-        self.trace_uatrange(0, self.state.initdata.regionB.unkptr_214, 0x4000, name="Shared AP=0 region")
+        self.trace_uatrange(0, self.state.initdata.regionB.buffer_mgr_ctl_addr, 0x4000, name="Buffer manager ctl")
 
     def add_mon_regions(self):
+        return
         initdata = self.state.initdata
         if initdata is not None:
             self.mon_addva(0, initdata.regionA_addr, 0x4000, "RegionA")
             self.mon_addva(0, initdata.regionB_addr, 0x6bc0, "RegionB")
             self.mon_addva(0, initdata.regionC_addr, 0x11d40, "RegionC")
-            self.mon_addva(0, initdata.regionB.unkptr_170, 0xc0, "unkptr_170")
-            self.mon_addva(0, initdata.regionB.unkptr_178, 0x1c0, "unkptr_178")
-            self.mon_addva(0, initdata.regionB.unkptr_180, 0x140, "unkptr_180")
+            #self.mon_addva(0, initdata.regionB.unkptr_170, 0xc0, "unkptr_170")
+            #self.mon_addva(0, initdata.regionB.unkptr_178, 0x1c0, "unkptr_178")
+            #self.mon_addva(0, initdata.regionB.unkptr_180, 0x140, "unkptr_180")
             self.mon_addva(0, initdata.regionB.unkptr_190, 0x80, "unkptr_190")
             self.mon_addva(0, initdata.regionB.unkptr_198, 0xc0, "unkptr_198")
-            self.mon_addva(0, initdata.regionB.unkptr_214, 0x4000, "Shared AP=0 region")
+            self.mon_addva(0, initdata.regionB.buffer_mgr_ctl_addr, 0x4000, "Buffer manager ctl")
             self.mon_addva(0, initdata.unkptr_20.unkptr_0, 0x40, "unkptr_20.unkptr_0")
             self.mon_addva(0, initdata.unkptr_20.unkptr_8, 0x40, "unkptr_20.unkptr_8")
 
@@ -956,7 +1028,7 @@ class AGXTracer(ASCTracer):
         self.uat.invalidate_cache()
         self.uat.dump(0, log=self.log)
         addr |= 0xfffff000_00000000
-        initdata = NewInitData.parse_stream(self.get_stream(0, addr))
+        initdata = InitData.parse_stream(self.get_stream(0, addr))
 
         self.log("Initdata:")
         self.log(initdata)
@@ -971,7 +1043,10 @@ class AGXTracer(ASCTracer):
         self.state.fwlog_ring2 = initdata.regionB.fwlog_ring2
         channels = initdata.regionB.channels
         for i in channelNames:
-            chan_info = channels[i]
+            if i == "FWCtl":
+                chan_info = initdata.fw_status.fwctl_channel
+            else:
+                chan_info = channels[i]
             self.state.channel_info.append(chan_info)
 
         self.init_channels()

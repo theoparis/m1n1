@@ -29,19 +29,22 @@ class GPUEventManager:
 
         return ev
 
+    def free_event(self, ev):
+        self.events[ev.id] = None
+        self.free_events.add(ev.id)
+
     def fired(self, flags):
+        self.agx.log("= Events fired =")
         for i, v in enumerate(flags):
             for j in range(64):
                 if v & (1 << j):
                     ev_id = i * 64 + j
                     ev = self.events[ev_id]
-                    #self.agx.log(f"Event fired: {ev_id}")
+                    self.agx.log(f"Event fired: {ev_id}")
                     if ev is None:
                         raise Exception("Received spurious notification for event ID {ev}")
                     ev.fire()
                     self.event_count += 1
-                    self.events[ev_id] = None
-                    self.free_events.add(ev_id)
 
 class GPUEvent:
     def __init__(self, ev_id):
@@ -50,3 +53,6 @@ class GPUEvent:
 
     def fire(self):
         self.fired = True
+
+    def rearm(self):
+        self.fired = False

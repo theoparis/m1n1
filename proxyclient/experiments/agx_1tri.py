@@ -7,10 +7,6 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from m1n1.setup import *
 from m1n1.shell import run_shell
 
-from m1n1.hw.pmu import PMU
-
-PMU(u).reset_panic_counter()
-
 from m1n1.agx import AGX
 from m1n1.agx.context import *
 
@@ -78,7 +74,7 @@ try:
     agx.start()
 
     ctx_id = 3
-    ctx_something = 2
+    buffer_mgr_slot = 2
 
     #agx.initdata.regionA.add_to_mon(mon)
     #agx.initdata.regionB.add_to_mon(mon)
@@ -537,7 +533,7 @@ try:
 
     wc_initbm = agx.kobj.new(WorkCommandInitBM)
     wc_initbm.context_id = ctx_id
-    wc_initbm.unk_8 = ctx_something
+    wc_initbm.unk_8 = buffer_mgr_slot
     wc_initbm.unk_c = 0
     wc_initbm.unk_10 = buffer_mgr.info.block_count
     wc_initbm.buffer_mgr = buffer_mgr.info
@@ -553,7 +549,7 @@ try:
     wc_ta.context_id = ctx_id
     wc_ta.unk_8 = 0
     wc_ta.event_control = event_control
-    wc_ta.unk_14 = ctx_something
+    wc_ta.unk_14 = buffer_mgr_slot
     wc_ta.buffer_mgr = buffer_mgr.info
     wc_ta.buf_thing = buf_desc
     wc_ta.unk_emptybuf_addr = wc_3d.unk_emptybuf_addr
@@ -674,7 +670,7 @@ try:
     start_ta.context_id = ctx_id
     start_ta.unk_38 = 1
     start_ta.unk_3c = 1 #0
-    start_ta.unk_40 = ctx_something
+    start_ta.unk_40 = buffer_mgr_slot
     start_ta.unk_48 = 1 #0
     start_ta.unk_50 = 0
     start_ta.struct3 = wc_ta.struct_3

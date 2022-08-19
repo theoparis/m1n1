@@ -135,7 +135,7 @@ class UartInterface(Reloadable):
         self.debug = debug
         self.devpath = None
         if device is None:
-            device = os.environ.get("M1N1DEVICE", "/dev/ttyACM0:115200")
+            device = os.environ.get("M1N1DEVICE", "/dev/m1n1:115200")
         if isinstance(device, str):
             baud = 115200
             if ":" in device:
@@ -593,6 +593,7 @@ class M1N1Proxy(Reloadable):
     P_HV_SWITCH_CPU = 0xc09
     P_HV_SET_TIME_STEALING = 0xc0a
     P_HV_PIN_CPU = 0xc0b
+    P_HV_WRITE_HCR = 0xc0c
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -885,8 +886,8 @@ class M1N1Proxy(Reloadable):
         self.request(self.P_IC_IALLU)
     def ic_ivau(self, addr, size):
         self.request(self.P_IC_IVAU, addr, size)
-    def ic_ivac(self, addr, size):
-        self.request(self.P_IC_IVAC, addr, size)
+    def dc_ivac(self, addr, size):
+        self.request(self.P_DC_IVAC, addr, size)
     def dc_isw(self, sw):
         self.request(self.P_DC_ISW, sw)
     def dc_csw(self, sw):
@@ -1018,10 +1019,12 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_START_SECONDARY, cpu, entry, *args)
     def hv_switch_cpu(self, cpu):
         return self.request(self.P_HV_SWITCH_CPU, cpu)
-    def hv_set_time_stealing(self, enabled):
-        return self.request(self.P_HV_SET_TIME_STEALING, int(bool(enabled)))
+    def hv_set_time_stealing(self, enabled, reset):
+        return self.request(self.P_HV_SET_TIME_STEALING, int(bool(enabled)), int(bool(reset)))
     def hv_pin_cpu(self, cpu):
         return self.request(self.P_HV_PIN_CPU, cpu)
+    def hv_write_hcr(self, hcr):
+        return self.request(self.P_HV_WRITE_HCR, hcr)
 
     def fb_init(self):
         return self.request(self.P_FB_INIT)
@@ -1076,7 +1079,7 @@ __all__.extend(k for k, v in globals().items()
 
 if __name__ == "__main__":
     import serial
-    uartdev = os.environ.get("M1N1DEVICE", "/dev/ttyACM0")
+    uartdev = os.environ.get("M1N1DEVICE", "/dev/m1n1")
     usbuart = serial.Serial(uartdev, 115200)
     uartif = UartInterface(usbuart, debug=True)
     print("Sending NOP...", end=' ')

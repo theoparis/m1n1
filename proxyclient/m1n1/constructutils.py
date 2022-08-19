@@ -1,13 +1,18 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+import inspect, textwrap, json, re, sys, os
+
 from construct import *
 from construct.core import evaluate
 from construct.lib import HexDisplayedInteger
 from .utils import *
-import inspect
-import textwrap
-import re
 
 g_struct_trace = set()
+g_struct_addrmap = {}
 g_depth = 0
+
+def ZPadding(size):
+    return Const(bytes(size), Bytes(size))
 
 def recusive_reload(obj, token=None):
     global g_depth
@@ -79,15 +84,23 @@ def str_value(value, repr=False):
     if isinstance(value, DecDisplayedInteger):
         return str(value)
     if isinstance(value, int):
-        return f"{value:#x}"
+        if value in g_struct_addrmap:
+            desc = g_struct_addrmap[value]
+            return f"{value:#x} ({desc})"
+        else:
+            return f"{value:#x}"
     if isinstance(value, ListContainer):
+        om = ""
+        while len(value) > 1 and not value[-1]:
+            value = value[:-1]
+            om = " ..."
         if len(value) <= 16:
-            return "[" + ", ".join(map(str_value, value)) + "]"
+            return "[" + ", ".join(map(str_value, value)) + f"{om}]"
         else:
             sv = ["[\n"]
             for off in range(0, len(value), 16):
                 sv.append("  " + ", ".join(map(str_value, value[off:off+16])) + ",\n")
-            sv.append("]\n")
+            sv.append(f"{om}]\n")
             return "".join(sv)
 
     return str(value)
@@ -159,6 +172,11 @@ class ReloadableConstructMeta(ReloadableMeta, Construct):
                     sizeof = subcon.sizeof()
                 except:
                     sizeof = None
+                if isinstance(subcon, Ver):
+                    if not subcon._active():
+                        cls._off[subcon.name] = -1, 0
+                        continue
+                    subcon = subcon.subcon
                 if isinstance(subcon, Renamed):
                     name = subcon.name
                     subcon = subcon.subcon
@@ -193,6 +211,7 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
     parsed = None
 
     def __init__(self):
+        self._pointers = set()
         self._addr = None
         self._meta = {}
 
@@ -266,6 +285,7 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
     @classmethod
     def _set_meta(cls, self, stream=None):
         if stream is not None:
+            self._pointers = set()
             self._meta = {}
             self._stream = stream
 
@@ -276,6 +296,8 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
                     sizeof = subcon.sizeof()
                 except:
                     break
+                if isinstance(subcon, Ver):
+                    subcon = subcon.subcon
                 if isinstance(subcon, Renamed):
                     name = subcon.name
                     #print(name, subcon)
@@ -285,6 +307,7 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
                         if meta is not None:
                             self._meta[name] = meta
                     if isinstance(subcon, Pointer):
+                        self._pointers.add(name)
                         continue
                     try:
                         #print(name, subcon)
@@ -294,6 +317,11 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
                     else:
                         if isinstance(val, ConstructClassBase):
                             val.set_addr(subaddr)
+                        if isinstance(val, list):
+                            for i in val:
+                                if isinstance(i, ConstructClassBase):
+                                    i.set_addr(subaddr)
+                                    subaddr += i.sizeof()
 
                 subaddr += sizeof
 
@@ -318,7 +346,9 @@ class ConstructClassBase(Reloadable, metaclass=ReloadableConstructMeta):
 
         self._apply(obj)
 
-        g_struct_trace.add((self._addr, f"{cls.name} (end: {self._addr + size:#x})"))
+        if self._addr > 0x10000:
+            g_struct_trace.add((self._addr, f"{cls.name} (end: {self._addr + size:#x})"))
+            g_struct_addrmap[self._addr] = f"{cls.name}"
         return self
 
     @classmethod
@@ -342,6 +372,13 @@ class ROPointer(Pointer):
     def _build(self, obj, stream, context, path):
         return obj
 
+    def _parse(self, stream, context, path):
+        recurse = getattr(stream, "recurse", False)
+        if not recurse:
+            return None
+
+        return Pointer._parse(self, stream, context, path)
+
 class ConstructClass(ConstructClassBase, Container):
     """ Offers two benifits over regular construct
 
@@ -362,7 +399,16 @@ class ConstructClass(ConstructClassBase, Container):
                 )
     """
 
-    def __str__(self, ignore=[]) -> str:
+    def diff(self, other, show_all=False):
+        return self.__str__(other=other, show_all=show_all)
+
+    def __eq__(self, other):
+        return all(self[k] == other[k] for k in self
+                   if (not k.startswith("_"))
+                   and (k not in self._pointers)
+                   and not callable(self[k]))
+
+    def __str__(self, ignore=[], other=None, show_all=False) -> str:
 
         str = self.__class__.__name__
         if self._addr is not None:
@@ -374,10 +420,52 @@ class ConstructClass(ConstructClassBase, Container):
         keys.sort(key = lambda x: self._off.get(x, (-1, 0))[0])
 
         for key in keys:
+            if key in self._off:
+                offv, sizeof = self._off[key]
+                if offv == -1:
+                    print(key, offv, sizeof)
+                    continue
             if key in ignore or key.startswith('_'):
                 continue
             value = getattr(self, key)
-            val_repr = str_value(value)
+            need_diff = False
+            if other is not None:
+                if key in self._pointers or callable(value):
+                    continue
+                other_value = getattr(other, key)
+                if not show_all and other_value == value:
+                    continue
+                offv, sizeof = self._off[key]
+                if sizeof == 0:
+                    continue
+                def _valdiff(value, other_value):
+                    if hasattr(value, "diff"):
+                        return value.diff(other_value)
+                    elif isinstance(value, bytes) and isinstance(other_value, bytes):
+                        pad = bytes()
+                        if len(value) & 3:
+                            pad = bytes(4 - (len(value) & 3))
+                        return chexdiff32(other_value+pad, value+pad, offset=offv, offset2=0)
+                    else:
+                        val_repr = str_value(value)
+                        if other_value != value:
+                            other_repr = str_value(other_value)
+                            return f"\x1b[33;1;4m{val_repr}\x1b[m ← \x1b[34m{other_repr}\x1b[m"
+                        return val_repr
+
+                if isinstance(value, list):
+                    val_repr = "{\n"
+                    for i, (a, b) in enumerate(zip(value, other_value)):
+                        if a == b:
+                            continue
+                        val_repr += f"[{i}] = " + textwrap.indent(_valdiff(a, b), "    ") + "\n"
+                        offv += sizeof // len(value)
+                    val_repr += "}\n"
+                else:
+                    val_repr = _valdiff(value, other_value)
+
+            else:
+                val_repr = str_value(value)
             off = ""
             meta = ""
             if key in self._off:
@@ -418,6 +506,8 @@ class ConstructClass(ConstructClassBase, Container):
     def _build_prepare(cls, obj):
         if isinstance(cls.subcon, Struct):
             for subcon in cls.subcon.subcons:
+                if isinstance(subcon, Ver):
+                    subcon = subcon.subcon
                 if not isinstance(subcon, Renamed):
                     continue
                 name = subcon.name
@@ -427,7 +517,9 @@ class ConstructClass(ConstructClassBase, Container):
                 if not isinstance(subcon, Pointer):
                     continue
                 addr_field = subcon.offset.__getfield__()
-                if not hasattr(obj, name) and hasattr(obj, addr_field):
+                # Ugh.
+                parent = subcon.offset._Path__parent(obj)
+                if not hasattr(obj, name) and hasattr(parent, addr_field):
                     # No need for building
                     setattr(obj, name, None)
                 elif hasattr(obj, name):
@@ -437,7 +529,7 @@ class ConstructClass(ConstructClassBase, Container):
                     except (AttributeError, KeyError):
                         addr = None
                     if addr is not None:
-                        setattr(obj, addr_field, addr)
+                        setattr(parent, addr_field, addr)
 
     @classmethod
     def _parse(cls, stream, context, path):
@@ -456,9 +548,166 @@ class ConstructClass(ConstructClassBase, Container):
                 g_struct_trace.add((val, f"{cls.name}.{key}"))
         return self
 
+    def _apply_classful(self, obj):
+        obj2 = dict(obj)
+        if isinstance(self.__class__.subcon, Struct):
+            for subcon in self.__class__.subcon.subcons:
+                name = subcon.name
+                if name is None:
+                    continue
+                subcon = subcon.subcon
+                if isinstance(subcon, Lazy):
+                    continue
+                if isinstance(subcon, Pointer):
+                    subcon = subcon.subcon
+                if isinstance(subcon, Ver):
+                    subcon = subcon.subcon
+                if isinstance(subcon, Array):
+                    subcon = subcon.subcon
+
+                if name not in obj2:
+                    continue
+
+                val = obj2[name]
+                if not isinstance(subcon, type) or not issubclass(subcon, ConstructClassBase):
+                    continue
+
+                def _map(v):
+                    if not isinstance(v, subcon):
+                        sc = subcon()
+                        sc._apply(v)
+                        return sc
+                    return v
+
+                if isinstance(val, list):
+                    obj2[name] = list(map(_map, val))
+                else:
+                    obj2[name] = _map(val)
+
+        self._apply(obj2)
+
     def _apply(self, obj):
         self.update(obj)
 
+    def items(self):
+        for k in list(self):
+            if k.startswith("_"):
+                continue
+            yield k, self[k]
+
+    def addrof(self, name):
+        return self._addr + self._off[name][0]
+
+    def clone(self):
+        obj = type(self)()
+        obj.update(self)
+        return obj
+
+    @classmethod
+    def from_json(cls, fd):
+        d = json.load(fd)
+        obj = cls()
+        obj._apply_classful(d)
+        return obj
+
+    @classmethod
+    def is_versioned(cls):
+        for subcon in cls.subcon.subcons:
+            if isinstance(subcon, Ver):
+                return True
+            while True:
+                try:
+                    subcon = subcon.subcon
+                    if isinstance(subcon, type) and issubclass(subcon, ConstructClass) and subcon.is_versioned():
+                        return True
+                except:
+                    break
+        return False
+
+    @classmethod
+    def to_rust(cls):
+        assert isinstance(cls.subcon, Struct)
+        s = []
+        if cls.is_versioned():
+            s.append("#[versions(AGX)]"),
+
+        s += [
+            "#[derive(Debug, Clone, Copy)]",
+            "#[repr(C, packed(4))]",
+            f"struct {cls.__name__} {{",
+        ]
+        pad = 0
+        has_ver = False
+        for subcon in cls.subcon.subcons:
+            if isinstance(subcon, Ver):
+                if not has_ver:
+                    s.append("")
+                s.append(f"    #[ver({subcon.rust})]")
+                subcon = subcon.subcon
+                has_ver = True
+            else:
+                has_ver = False
+
+            name = subcon.name
+            if name is None:
+                name = f"__pad{pad}"
+                pad += 1
+
+            array_len = []
+            skip = False
+            while subcon:
+                if isinstance(subcon, Lazy):
+                    skip = True
+                    break
+                elif isinstance(subcon, Pointer):
+                    skip = True
+                    break
+                elif isinstance(subcon, Array):
+                    array_len.append(subcon.count)
+                elif isinstance(subcon, (HexDump, Default, Renamed, Dec, Hex, Const)):
+                    pass
+                else:
+                    break
+                subcon = subcon.subcon
+
+            if isinstance(subcon, Bytes):
+                array_len.append(subcon.length)
+                subcon = Int8ul
+
+            if skip:
+                #s.append(f"    // {name}: {subcon}")
+                continue
+
+            TYPE_MAP = {
+                Int64ul: "u64",
+                Int32ul: "u32",
+                Int16ul: "u16",
+                Int8ul: "u8",
+                Int64sl: "i64",
+                Int32sl: "i32",
+                Int16sl: "i16",
+                Int8sl: "i8",
+                Float32l: "f32",
+                Float64l: "f64",
+            }
+
+            t = TYPE_MAP.get(subcon, repr(subcon))
+
+            if isinstance(subcon, type) and issubclass(subcon, ConstructClass):
+                t = subcon.__name__
+                if subcon.is_versioned():
+                    t += "::ver"
+
+            for n in array_len[::-1]:
+                t = f"[{t}; {n:#x}]"
+
+            s.append(f"    {name}: {t},")
+
+            if has_ver:
+                s.append("")
+
+        s += ["}"]
+        return "\n".join(s)
 
 class ConstructValueClass(ConstructClassBase):
     """ Same as Construct, but for subcons that are single values, rather than containers
@@ -466,10 +715,18 @@ class ConstructValueClass(ConstructClassBase):
         the value is stored as .value
     """
 
+    def __eq__(self, other):
+        return self.value == other.value
+
     def __str__(self) -> str:
         str = f"{self.__class__.__name__} @ 0x{self._addr:x}:"
         str += f"\t{str_value(self.value)}"
         return str
+
+    def __getitem__(self, i):
+        if i == "value":
+            return self.value
+        raise Exception(f"Invalid index {i}")
 
     @classmethod
     def _build(cls, obj, stream, context, path):
@@ -477,6 +734,7 @@ class ConstructValueClass(ConstructClassBase):
 
     def _apply(self, obj):
         self.value = obj
+    _apply_classful = _apply
 
 class ConstructRegMap(BaseRegMap):
     TYPE_MAP = {
@@ -492,6 +750,8 @@ class ConstructRegMap(BaseRegMap):
         self._namemap = {}
         assert isinstance(cls.subcon, Struct)
         for subcon in cls.subcon.subcons:
+            if isinstance(subcon, Ver):
+                subcon = subcon.subcon
             if not isinstance(subcon, Renamed):
                 continue
             name = subcon.name
@@ -499,6 +759,8 @@ class ConstructRegMap(BaseRegMap):
             if subcon not in self.TYPE_MAP:
                 continue
             rtype = self.TYPE_MAP[subcon]
+            if name not in cls._off:
+                continue
             addr, size = cls._off[name]
             self._addrmap[addr] = name, rtype
             self._namemap[name] = addr, rtype
@@ -515,8 +777,101 @@ class ConstructRegMap(BaseRegMap):
             return
         self._accessor[k].val = v
 
+class Ver(Subconstruct):
+    # Ugly hack to make this survive across reloads...
+    try:
+        _version = sys.modules["m1n1.constructutils"].Ver._version
+    except (KeyError, AttributeError):
+        _version = [os.environ.get("AGX_FWVER", "0")]
+
+    def __init__(self, version, subcon):
+        self.rust, self.min_ver, self.max_ver = self.parse_ver(version)
+        self._name = subcon.name
+        self.subcon = subcon
+        self.flagbuildnone = True
+        self.docs = ""
+        self.parsed = None
+
+    @property
+    def name(self):
+        if self._active():
+            return self._name
+        else:
+            return None
+
+    @staticmethod
+    def _split_ver(s):
+        if not s:
+            return None
+        parts = re.split(r"[-,. ]", s)
+        parts2 = []
+        for i in parts:
+            try:
+                parts2.append(int(i))
+            except ValueError:
+                parts2.append(i)
+        if len(parts2) > 3 and parts2[-2] == "beta":
+            parts2[-3] -= 1
+            parts2[-2] = 99
+        return tuple(parts2)
+
+    @classmethod
+    def parse_ver(cls, version):
+        def rv(s):
+            return "V" + s.replace(" ", "").replace(".", "_").replace("beta", "b")
+
+        if ".." in version:
+            v = version.split("..")
+            min_ver = cls._split_ver(v[0])
+            max_ver = cls._split_ver(v[1])
+            if v[0]:
+                rust = f"V >= {rv(v[0])} && V < {rv(v[1])}"
+            else:
+                rust = f"V < {rv(v[1])}"
+        else:
+            min_ver = cls._split_ver(version)
+            max_ver = None
+            rust = f"V >= {rv(version)}"
+
+        if min_ver is None:
+            min_ver = (0,)
+        if max_ver is None:
+            max_ver = (999,)
+
+        return rust, min_ver, max_ver
+
+    @classmethod
+    def check(cls, version):
+        _, min_ver, max_ver = cls.parse_ver(version)
+        v = cls._split_ver(cls._version[0])
+        return min_ver <= v < max_ver
+
+    def _active(self):
+        v = self._split_ver(self._version[0])
+        return self.min_ver <= v < self.max_ver
+
+    def _parse(self, stream, context, path):
+        if not self._active():
+            return None
+        obj = self.subcon._parse(stream, context, path)
+        return obj
+
+    def _build(self, obj, stream, context, path):
+        if not self._active():
+            return None
+        return self.subcon._build(obj, stream, context, path)
+
+    def _sizeof(self, context, path):
+        if not self._active():
+            return 0
+        return self.subcon._sizeof(context, path)
+
+    @classmethod
+    def set_version(cls, version):
+        cls._version[0] = version
+
 def show_struct_trace(log=print):
     for addr, desc in sorted(list(g_struct_trace)):
         log(f"{addr:>#18x}: {desc}")
 
-__all__ = ["ConstructClass", "ConstructValueClass", "Dec", "ROPointer", "show_struct_trace"]
+__all__ = ["ConstructClass", "ConstructValueClass", "Dec", "ROPointer", "show_struct_trace", "ZPadding", "Ver"]
