@@ -52,7 +52,13 @@ typedef enum _hv_entry_type {
    any regs that won't be used during normal operation will have 
    "reserved_" in front of them to pad out dist to 64k size */
 
-// distributor struct
+/**
+ * Distributor registers
+ * 
+ * This is global to the system, accesses from the guest via MMIO writes or reads will read/write data from an instance
+ * of this struct.
+ * 
+ */
 
 typedef struct vgicv3_distributor {
     //0x0000-0x0010
@@ -123,8 +129,8 @@ typedef struct vgicv3_distributor {
     unsigned int interrupt_sgi_set_pending_regs[4];
 
     //0x0F80-0x0FFC - GICD_INMIR - NMI Regs
-    //Apple SoCs as of 6/7/2022 do not implement NMI
-    //add NMI regs when NMI support ships
+    //Apple SoCs as of 8/17/2022 do not implement NMI, these will never be used by anything but add them so that the offsets follow ARM spec
+    unsigned int interrupt_nmi_regs[32];
 
     //0x1000-0x107C - GICD_IGROUPR0E-31E
     unsigned int interrupt_group_regs_ext_spi_range[32];
@@ -161,8 +167,8 @@ typedef struct vgicv3_distributor {
 
     //0x3B00-0x3B7C
     //NMI regs for extended SPI range
-    //ditto above point, no NMI support on Apple chips
-    //therefore no NMI regs until support is added.
+    //ditto above point, no NMI support on Apple chips, but add it so that the offsets are the same as ARM spec
+    unsigned int interrupt_nmi_reg_ext_spi_range[32];
 
     //0x6100-0x7FD8 - GICD_IROUTER(32-1019)
     unsigned long interrupt_router_regs[988];
@@ -173,9 +179,14 @@ typedef struct vgicv3_distributor {
 
 } vgicv3_dist;
 
-//redist regs
-//as with dist, reserved_ in front of regs
-//that won't be used on M1/M2
+/**
+ * Redistributor registers.
+ * 
+ * These need to be laid out contiguously, so that the guest sees in the IPA space that they're contiguous.
+ * 
+ * Maybe have a struct per CPU that has a pointer to it's given redistributor region? Or make an array of these, then point to the array?
+ * 
+ */
 typedef struct vgicv3_redistributor_region {
     //8 of these on M1/M2, 10-20 on M1v2
 } vgicv3_vcpu_redist;
