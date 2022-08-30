@@ -129,7 +129,7 @@ typedef struct vgicv3_distributor {
     unsigned int interrupt_sgi_set_pending_regs[4];
 
     //0x0F80-0x0FFC - GICD_INMIR - NMI Regs
-    //Apple SoCs as of 8/17/2022 do not implement NMI, these will never be used by anything but add them so that the offsets follow ARM spec
+    //Apple SoCs as of 8/17/2022 do not implement NMI, these will never be used by anything but add them so that the size of the dist follows ARM spec
     unsigned int interrupt_nmi_regs[32];
 
     //0x1000-0x107C - GICD_IGROUPR0E-31E
@@ -167,7 +167,7 @@ typedef struct vgicv3_distributor {
 
     //0x3B00-0x3B7C
     //NMI regs for extended SPI range
-    //ditto above point, no NMI support on Apple chips, but add it so that the offsets are the same as ARM spec
+    //ditto above point, no NMI support on Apple chips, but add it so that the size of the dist is the same as ARM spec
     unsigned int interrupt_nmi_reg_ext_spi_range[32];
 
     //0x6100-0x7FD8 - GICD_IROUTER(32-1019)
