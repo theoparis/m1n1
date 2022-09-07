@@ -18,6 +18,7 @@
 
 
 #include "hv.h"
+#include "hv_vgic.h"
 #include "assert.h"
 #include "cpu_regs.h"
 #include "display.h"
@@ -54,6 +55,8 @@
  * - 8 list registers
  * - direct injection of virtual interrupts are not supported (therefore not a GICv4, and by implication, no NMIs supported either)
  * 
+ * At the moment an ITS will not be implemented or used.
+ * 
  * This code makes one critical assumption: the guest that runs under m1n1 will be the only guest running on the system throughout.
  * As such, the distributor is a simple global variable (and therefore part of m1n1's state) rather than being contained in a per-VM struct.
  * 
@@ -82,11 +85,50 @@
  */
 
 //a pointer to the distributor as a global variable (accessible throughout the entire program)
-vgicv3_dist *distributor;
+vgicv3_dist_regs *distributor;
 
 
 
-/* Initialization code */
+/**
+ * @brief handle_vgic_dist_access
+ * 
+ * The function that will be executed on every vGIC distributor access from the guest once mapepd by hv_map_hook
+ * 
+ * 
+ * @param ctx - exception info/context
+ * @param addr
+ * @param val
+ * @param write - was the attempted access a read or a write? 
+ * @param width - size of the access
+ * @return true 
+ * @return false 
+ */
+static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bool write, int width)
+{
+    return false;
+}
+
+
+/**
+ * @brief handle_vgic_redist_access
+ * 
+ * The function that will be executed on every vGIC redistributor access from the guest once mapepd by hv_map_hook
+ * 
+ * 
+ * @param ctx - exception info/context
+ * @param addr
+ * @param val
+ * @param write - was the attempted access a read or a write? 
+ * @param width - size of the access
+ * @return true 
+ * @return false 
+ */
+static bool handle_vgic_redist_access(struct exc_info *ctx, u64 addr, u64 *val, bool write, int width)
+{
+    return false;
+}
+
+
 
 /**
  * @brief hv_vgicv3_init
@@ -105,17 +147,17 @@ int hv_vgicv3_init(void)
 {
     /* Distributor setup */
     //TODO: most distributor setup
-    distributor = heapblock_alloc(sizeof(vgicv3_dist));
+    distributor = heapblock_alloc(sizeof(vgicv3_dist_regs));
     hv_vgicv3_init_dist_registers();
 
     //all distributor structs are ready, map it into the guest IPA space
-    hv_map_hook(0xF00000000, handle_vgic_dist_access, sizeof(vgicv3_dist));
+    hv_map_hook(0xF00000000, handle_vgic_dist_access, sizeof(vgicv3_dist_regs));
 
 
     /* Redistributor setup */
     //TODO: all redistributor setup
     //all redistributors are ready, map them into the guest IPA space
-    hv_map_hook(0xF10000000, handle_vgic_redist_access, sizeof(vgicv3_vcpu_redist));
+    hv_map_hook(0xF10000000, handle_vgic_redist_access, sizeof(vgicv3_vcpu_redist_regs));
 
     //vGIC setup is successful, let the caller know
     return 0;
@@ -135,9 +177,9 @@ void hv_vgicv3_init_dist_registers(void)
 {
     distributor->ctl_register = (BIT(6) | BIT(4) | BIT(1) | BIT(0));
     distributor->type_register = (BIT(22) | BIT(21) | BIT(20) | BIT(19));
+    distributor->imp_id_register = (BIT(10) | BIT(5) | BIT(4) | BIT(3) | BIT(1) | BIT(0));
     distributor->type_register_2 = 0;
     distributor->err_sts = 0;
-    distributor->imp_id_register = (BIT(10) | BIT(5) | BIT(4) | BIT(3) | BIT(1) | BIT(0));
     //set all SPIs to group 1, disable all SPIs
     for(int i = 0; i < 32; i++)
     {
@@ -202,43 +244,4 @@ int hv_vgicv3_enable_virtual_interrupts(void)
 
 
     return 0;
-}
-
-/**
- * @brief handle_vgic_dist_access
- * 
- * The function that will be executed on every vGIC distributor access from the guest once mapepd by hv_map_hook
- * 
- * 
- * @param ctx - exception info/context
- * @param addr
- * @param val
- * @param write - was the attempted access a read or a write? 
- * @param width - size of the access
- * @return true 
- * @return false 
- */
-static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bool write, int width)
-{
-    return false;
-}
-
-
-/**
- * @brief handle_vgic_dist_access
- * 
- * The function that will be executed on every vGIC redistributor access from the guest once mapepd by hv_map_hook
- * 
- * 
- * @param ctx - exception info/context
- * @param addr
- * @param val
- * @param write - was the attempted access a read or a write? 
- * @param width - size of the access
- * @return true 
- * @return false 
- */
-static bool handle_vgic_redist_access(struct exc_info *ctx, u64 addr, u64 *val, bool write, int width)
-{
-    return false;
 }
