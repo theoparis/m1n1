@@ -68,8 +68,8 @@
  * and redistributors will be mapped. (Note that the first 0x1FFFFFFFF bytes of RAM are also available unconditionally and if the current 
  * location is problematic down the line, the vGIC will be moved to the bottom of address space)
  * 
- * On M1v2, due to the larger address space, it's a lot easier to pick a location (however, due to my focus on the non v2 variants first
- * I have not yet pinned down a good location for the distributor and redistributors yet)
+ * On M1v2, the distributor/redistributor regions are placed between the end of MMIO space and the start of DRAM, to keep it in
+ * a region where it's known that they won't issue.
  * 
  * Current mapping for M1/M2:
  * 
@@ -78,8 +78,8 @@
  * 
  * Current mapping for M1v2:
  * 
- * Distributor - unknown
- * Redistributors - unknown
+ * Distributor - 0x5000000000
+ * Redistributors - 0x5100000000
  * 
  * 
  */
@@ -92,7 +92,7 @@ vgicv3_dist_regs *distributor;
 /**
  * @brief handle_vgic_dist_access
  * 
- * The function that will be executed on every vGIC distributor access from the guest once mapepd by hv_map_hook
+ * The function that will be executed on every vGIC distributor access from the guest once mapped by hv_map_hook
  * 
  * 
  * @param ctx - exception info/context
@@ -112,7 +112,7 @@ static bool handle_vgic_dist_access(struct exc_info *ctx, u64 addr, u64 *val, bo
 /**
  * @brief handle_vgic_redist_access
  * 
- * The function that will be executed on every vGIC redistributor access from the guest once mapepd by hv_map_hook
+ * The function that will be executed on every vGIC redistributor access from the guest once mapped by hv_map_hook
  * 
  * 
  * @param ctx - exception info/context

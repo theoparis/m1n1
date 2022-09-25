@@ -145,10 +145,12 @@ typedef struct vgicv3_redistributor_region {
 
 /**
  * 
- * vGIC device struct
+ * vGIC device struct.
+ * 
+ * Note that this is just the MMIO regions, as the CPU interface is in hardware.
  * 
  */
-typedef struct vgicv3_device {
+typedef struct vgicv3_device_mmio {
 
     vgicv3_dist_regs distributor;
 
