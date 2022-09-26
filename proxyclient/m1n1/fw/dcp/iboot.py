@@ -195,8 +195,13 @@ class DCPIBootClient(StandardASC):
     DVA_OFFSET = 0xf00000000
 
     ENDPOINTS = {
+        0x20: AFKSystemEndpoint,
         0x23: DCPIBootEndpoint,
-        0x24: DCPAVEndpoint,
+        0x24: DCPDPTXEndpoint,
+        0x2a: DCPDPTXPortEndpoint,
+        0x27: DCPAVDeviceEndpoint,
+        0x28: DCPAVServiceEndpoint,
+        0x29: DCPAVVideoEndpoint,
     }
 
     def __init__(self, u, asc_base, dart=None, disp_dart=None):

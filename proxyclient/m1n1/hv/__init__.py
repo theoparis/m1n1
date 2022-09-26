@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-import io, sys, traceback, struct, array, bisect, os, signal, runpy
+import io, sys, traceback, struct, array, bisect, os, plistlib, signal, runpy
 from construct import *
 
 from ..asm import ARMAsm
@@ -82,6 +82,7 @@ class HV(Reloadable):
         self.want_vbar = None
         self.vectors = [None]
         self._bps = [None, None, None, None, None]
+        self._bp_hooks = dict()
         self._wps = [None, None, None, None]
         self._wpcs = [0, 0, 0, 0]
         self.sym_offset = 0
@@ -110,6 +111,7 @@ class HV(Reloadable):
         self.hvcall_handlers = {}
         self.switching_context = False
         self.show_timestamps = False
+        self.trace_tlbos = False
 
     def _reloadme(self):
         super()._reloadme()
@@ -806,6 +808,10 @@ class HV(Reloadable):
         self.u.msr(MDSCR_EL1, MDSCR(SS=1, MDE=1).value)
         self.ctx.spsr.SS = 1
 
+        if ctx.elr in self._bp_hooks:
+            if self._bp_hooks[ctx.elr](ctx):
+                return True
+
     def handle_watch(self, ctx):
         # disable all watchpoints so that we don't get stuck
         for i in range(len(self._wps)):
@@ -1074,19 +1080,21 @@ class HV(Reloadable):
         if self.ctx.cpu_id != cpu:
             raise Exception(f"Switching to CPU #{cpu} but ended on #{self.ctx.cpu_id}")
 
-    def add_hw_bp(self, vaddr):
-        for i, i_vaddr in enumerate(self._bps):
-            if i_vaddr is None:
-                cpu_id = self.ctx.cpu_id
-                try:
-                    for cpu in self.cpus():
-                        self.u.msr(DBGBCRn_EL1(i), DBGBCR(E=1, PMC=0b11, BAS=0xf).value)
-                        self.u.msr(DBGBVRn_EL1(i), vaddr)
-                finally:
-                    self.cpu(cpu_id)
-                self._bps[i] = vaddr
-                return
-        raise ValueError("Cannot add more HW breakpoints")
+    def add_hw_bp(self, vaddr, hook=None):
+        if None not in self._bps:
+            raise ValueError("Cannot add more HW breakpoints")
+
+        i = self._bps.index(None)
+        cpu_id = self.ctx.cpu_id
+        try:
+            for cpu in self.cpus():
+                self.u.msr(DBGBCRn_EL1(i), DBGBCR(E=1, PMC=0b11, BAS=0xf).value)
+                self.u.msr(DBGBVRn_EL1(i), vaddr)
+        finally:
+            self.cpu(cpu_id)
+        self._bps[i] = vaddr
+        if hook is not None:
+            self._bp_hooks[vaddr] = hook
 
     def remove_hw_bp(self, vaddr):
         idx = self._bps.index(vaddr)
@@ -1098,12 +1106,18 @@ class HV(Reloadable):
                 self.u.msr(DBGBVRn_EL1(idx), 0)
         finally:
             self.cpu(cpu_id)
+        if vaddr in self._bp_hooks:
+            del self._bp_hooks[vaddr]
 
-    def add_sym_bp(self, name):
-        return self.add_hw_bp(self.resolve_symbol(name))
+    def add_sym_bp(self, name, hook=None):
+        return self.add_hw_bp(self.resolve_symbol(name), hook=hook)
 
     def remove_sym_bp(self, name):
         return self.remove_hw_bp(self.resolve_symbol(name))
+
+    def clear_hw_bps(self):
+        for vaddr in self._bps:
+            self.remove_hw_bp(vaddr)
 
     def add_hw_wp(self, vaddr, bas, lsc):
         for i, i_vaddr in enumerate(self._wps):
@@ -1299,7 +1313,8 @@ class HV(Reloadable):
         hcr.TVM = 0
         hcr.FMO = 1
         hcr.IMO = 0
-        hcr.TTLBOS = 1
+        if self.trace_tlbos:
+            hcr.TTLBOS = 1
         self.u.msr(HCR_EL2, hcr.value)
 
         # Trap dangerous things
@@ -1526,7 +1541,7 @@ class HV(Reloadable):
         self.p.hv_set_time_stealing(False)
 
 
-    def load_raw(self, image, entryoffset=0x800):
+    def load_raw(self, image, entryoffset=0x800, use_xnu_symbols=False, vmin=0):
         sepfw_start, sepfw_length = self.u.adt["chosen"]["memory-map"].SEPFW
         tc_start, tc_size = self.u.adt["chosen"]["memory-map"].TrustCache
         if hasattr(self.u.adt["chosen"]["memory-map"], "preoslog"):
@@ -1598,6 +1613,9 @@ class HV(Reloadable):
         self.tba.devtree = self.adt_base - phys_base + self.tba.virt_base
         self.tba.top_of_kernel_data = guest_base + image_size
 
+        if use_xnu_symbols == True:
+            self.sym_offset = vmin - guest_base + self.tba.phys_base - self.tba.virt_base
+
         self.iface.writemem(guest_base + self.bootargs_off, BootArgs.build(self.tba))
 
         print("Setting secondary CPU RVBARs...")
@@ -1607,6 +1625,10 @@ class HV(Reloadable):
             print(f"  {cpu.name}: [0x{addr:x}] = 0x{rvbar:x}")
             self.p.write64(addr, rvbar)
 
+    def _load_macho_symbols(self):
+        self.symbol_dict = self.macho.symbols
+        self.symbols = [(v, k) for k, v in self.macho.symbols.items()]
+        self.symbols.sort()
 
     def load_macho(self, data, symfile=None):
         if isinstance(data, str):
@@ -1620,9 +1642,7 @@ class HV(Reloadable):
             macho.add_symbols("com.apple.kernel", syms)
             self.xnu_mode = True
 
-        self.symbol_dict = macho.symbols
-        self.symbols = [(v, k) for k, v in macho.symbols.items()]
-        self.symbols.sort()
+        self._load_macho_symbols()
 
         def load_hook(data, segname, size, fileoff, dest):
             if segname != "__TEXT_EXEC":
@@ -1653,7 +1673,7 @@ class HV(Reloadable):
 
         #image = macho.prepare_image(load_hook)
         image = macho.prepare_image()
-        self.load_raw(image, entryoffset=(macho.entry - macho.vmin))
+        self.load_raw(image, entryoffset=(macho.entry - macho.vmin), use_xnu_symbols=self.xnu_mode, vmin=macho.vmin)
 
 
     def update_pac_mask(self):
@@ -1682,6 +1702,14 @@ class HV(Reloadable):
                 self.symbols.append((addr, name))
                 self.symbol_dict[name] = addr
         self.symbols.sort()
+
+    def add_kext_symbols(self, kext, demangle=False):
+        info_plist = plistlib.load(open(f"{kext}/Contents/Info.plist", "rb"))
+        identifier = info_plist["CFBundleIdentifier"]
+        name = info_plist["CFBundleName"]
+        macho = MachO(open(f"{kext}/Contents/MacOS/{name}", "rb"))
+        self.macho.add_symbols(identifier, macho, demangle=demangle)
+        self._load_macho_symbols()
 
     def _handle_sigint(self, signal=None, stack=None):
         self._sigint_pending = True

@@ -41,12 +41,18 @@ EPICSubHeader = Struct(
     "timestamp" / Default(Int64ul, 0),
     "seq" / Int16ul,
     "unk" / Default(Hex(Int16ul), 0),
-    "unk2" / Default(Hex(Int32ul), 0),
+    "inline_len" / Hex(Int32ul),
 )
 
 EPICAnnounce = Struct(
     "name" / Padded(32, CString("utf8")),
     "props" / Optional(OSSerialize())
+)
+
+EPICSetProp = Struct(
+    "name_len" / Int32ul,
+    "name" / Aligned(4, CString("utf8")),
+    "value" / OSSerialize()
 )
 
 EPICCmd = Struct(
@@ -94,14 +100,27 @@ class EPICService:
         chexdump(fd.read())
 
     def handle_notify(self, category, type, seq, fd):
-        self.log(f"Notify {category}/{type} #{seq}")
-        chexdump(fd.read())
+        retcode = struct.unpack("<I", fd.read(4))[0]
+        self.log(f"Notify {category}/{type} #{seq} ({retcode})")
+        data = fd.read()
+        chexdump(data)
+        print("Send ACK")
+
+        data = data[:0x50] + b"\x01\x00\x00\x00" + data[0x54:]
+
+        pkt = struct.pack("<I", 0) + data
+        self.ep.send_epic(self.chan, EPICType.NOTIFY_ACK, EPICCategory.REPLY, type, seq, pkt, len(data))
 
     def handle_reply(self, category, type, seq, fd):
         off = fd.tell()
-        if len(fd.read()) == 4:
+        data = fd.read()
+        if len(data) == 4:
             retcode = struct.unpack("<I", data)[0]
-            raise EPICError(f"IOP returned errcode {retcode:#x}")
+            if retcode:
+                raise EPICError(f"IOP returned errcode {retcode:#x}")
+            else:
+                self.reply = retcode
+                return
         fd.seek(off)
         cmd = EPICCmd.parse_stream(fd)
         payload = fd.read()
@@ -135,22 +154,64 @@ class EPICService:
             self.ep.asc.work()
         return self.reply
 
+class EPICStandardService(EPICService):
+    def call(self, group, cmd, data=b'', replen=None):
+        msg = struct.pack("<2xHIII48x", group, cmd, len(data), 0x69706378) + data
+        if replen is not None:
+            replen += 64
+        resp = self.send_cmd(0xc0, msg, replen)
+        if not resp:
+            return
+        rgroup, rcmd, rlen, rmagic = struct.unpack("<2xHIII", resp[:16])
+        assert rmagic == 0x69706378
+        assert rgroup == group
+        assert rcmd == cmd
+        return resp[64:64+rlen]
+
+    def getLocation(self, unk=0):
+        return struct.unpack("<16xI12x", self.call(4, 4, bytes(32)))
+
+    def getUnit(self, unk=0):
+        return struct.unpack("<16xI12x", self.call(4, 5, bytes(32)))
+
+    def open(self, unk=0):
+        self.call(4, 6, struct.pack("<16xI12x", unk))
+
+    def close(self):
+        self.call(4, 7, bytes(16))
+
+class AFKSystemService(EPICService):
+    NAME = "system"
+    SHORT = "system"
+
+    def getProperty(self, prop, val):
+        pass
+        #self.send_cmd(0x40, msg, 0)
+
+    def setProperty(self, prop, val):
+        msg = {
+            "name_len": (len(prop) + 3) & ~3,
+            "name": prop,
+            "value": val,
+        }
+        msg = EPICSetProp.build(msg)
+        self.send_cmd(0x43, msg, 0)
+
 class EPICEndpoint(AFKRingBufEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.serv_map = {}
         self.chan_map = {}
+        self.serv_names = {}
+        self.hseq = 0
 
         for i in self.SERVICES:
-            srv = i(self)
-            setattr(self, srv.SHORT, srv)
-            self.serv_map[srv.NAME] = srv
+            self.serv_names[i.NAME] = i
 
     def handle_ipc(self, data):
         fd = BytesIO(data)
         hdr = EPICHeader.parse_stream(fd)
         sub = EPICSubHeader.parse_stream(fd)
-
 
         if self.verbose > 2:
             self.log(f"Ch {hdr.channel} Type {hdr.type} Ver {hdr.version} Seq {hdr.seq}")
@@ -165,16 +226,31 @@ class EPICEndpoint(AFKRingBufEndpoint):
         elif sub.category == EPICCategory.COMMAND:
             self.handle_cmd(hdr, sub, fd)
 
+    def wait_for(self, name):
+        while True:
+            srv = getattr(self, name, None)
+            if srv is not None and srv.ready:
+                break
+            self.asc.work()
+
     def handle_report(self, hdr, sub, fd):
         if sub.type == 0x30:
             init = EPICAnnounce.parse_stream(fd)
-            key = init.name
+            if init.props is None:
+                init.props = {}
+            name = init.name
             if "EPICName" in init.props:
-                key = init.props["EPICName"]
-            if key in self.serv_map:
-                self.serv_map[key].init(init.props)
-                self.serv_map[key].chan = hdr.channel
-                self.chan_map[hdr.channel] = self.serv_map[key]
+                name = init.props["EPICName"]
+            key = name + str(init.props.get("EPICUnit", ""))
+            if name in self.serv_names:
+                srv = self.serv_names[name](self)
+                short = srv.SHORT + str(init.props.get("EPICUnit", ""))
+                setattr(self, short, srv)
+                srv.init(init.props)
+                srv.chan = hdr.channel
+                self.chan_map[hdr.channel] = srv
+                self.serv_map[key] = srv
+                self.log(f"New service: {key} on channel {hdr.channel} (short name: {short})")
             else:
                 self.log(f"Unknown service {key} on channel {hdr.channel}")
         else:
@@ -192,15 +268,25 @@ class EPICEndpoint(AFKRingBufEndpoint):
     def handle_cmd(self, hdr, sub, fd):
         self.chan_map[hdr.channel].handle_cmd(sub.category, sub.type, sub.seq, fd)
     
-    def send_epic(self, chan, ptype, category, type, seq, data):
+    def send_epic(self, chan, ptype, category, type, seq, data, inline_len=0):
         hdr = Container()
         hdr.channel = chan
         hdr.type = ptype
-        hdr.seq = 0
+        hdr.seq = self.hseq
+        self.hseq += 1
+
         sub = Container()
         sub.length = len(data)
         sub.category = category
         sub.type = type
         sub.seq = seq
+        sub.inline_len = inline_len
         pkt = EPICHeader.build(hdr) + EPICSubHeader.build(sub) + data
         super().send_ipc(pkt)
+
+class AFKSystemEndpoint(EPICEndpoint):
+    SHORT = "system"
+
+    SERVICES = [
+        AFKSystemService,
+    ]

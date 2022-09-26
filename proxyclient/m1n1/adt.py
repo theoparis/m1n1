@@ -141,6 +141,19 @@ GPUPerfState = Struct(
     "volt" / Int32ul,
 )
 
+SpeakerConfig = Struct(
+    "rx_slot" / Int8ul,
+    "amp_gain" / Int8ul,
+    "vsense_slot" / Int8ul,
+    "isense_slot" / Int8ul,
+)
+
+DCBlockerConfig = Struct(
+    "dc_blk0" / Hex(Int8ul),
+    "dc_blk1" / Hex(Int8ul),
+    "pad" / Hex(Int16ul),
+)
+
 DEV_PROPERTIES = {
     "pmgr": {
         "*": {
@@ -206,7 +219,13 @@ DEV_PROPERTIES = {
         "*": {
             "pmap-io-ranges": PMAPIORanges,
         }
-    }
+    },
+    "audio-*": {
+        "*": {
+            "speaker-config": SafeGreedyRange(SpeakerConfig),
+            "amp-dcblocker-config": DCBlockerConfig,
+        },
+    },
 }
 
 def parse_prop(node, path, node_name, name, v, is_template=False):
@@ -507,17 +526,25 @@ class ADTNode:
         addr = reg.addr
         size = reg.size
 
-        node = self._parent
+        return self._parent.translate(addr), size
+
+    def translate(self, addr):
+        node = self
         while node is not None:
             if "ranges" not in node._properties:
                 break
             for r in node.ranges:
-                if r.bus_addr <= addr < (r.bus_addr + r.size):
-                    addr = addr - r.bus_addr + r.parent_addr
+                ba = r.bus_addr
+                # PCIe special case, because Apple really broke
+                # the spec here with their little endian antics
+                if isinstance(ba, list) and len(ba) == 3:
+                    ba = (ba[0] << 64) | (ba[2] << 32) | ba[1]
+                if ba <= addr < (ba + r.size):
+                    addr = addr - ba + r.parent_addr
                     break
             node = node._parent
 
-        return addr, size
+        return addr
 
     def tostruct(self):
         properties = []
