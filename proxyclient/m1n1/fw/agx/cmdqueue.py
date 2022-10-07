@@ -239,9 +239,9 @@ class WorkCommand3D(ConstructClass):
         "struct_6" / Start3DStruct6,
         "struct_7" / Start3DStruct7,
         "unk_buf2" / WorkCommand1_UnkBuf2,
-        "ts1" / Timestamp,
-        "ts2" / Timestamp,
-        "ts3" / Timestamp,
+        "ts1" / TimeStamp,
+        "ts2" / TimeStamp,
+        "ts3" / TimeStamp,
         "unk_914" / Int32ul,
         "unk_918" / Int64ul,
         "unk_920" / Int32ul,
@@ -318,9 +318,9 @@ class WorkCommandTA(ConstructClass):
 
         "unk_594" / WorkCommand0_UnkBuf,
 
-        "ts1" / Timestamp,
-        "ts2" / Timestamp,
-        "ts3" / Timestamp,
+        "ts1" / TimeStamp,
+        "ts2" / TimeStamp,
+        "ts3" / TimeStamp,
 
         "unk_5c4" / Int32ul,
         "unk_5c8" / Int32ul,
@@ -459,8 +459,7 @@ class CommandQueueInfo(ConstructClass):
         "unk_9c" / Int32ul,
         "gpu_context_addr" / Hex(Int64ul), # GPU managed context, shared between 3D and TA. Passed to DC_DestroyContext
         "gpu_context" / ROPointer(this.gpu_context_addr, GPUContextData),
-
-        "tail" / HexDump(Bytes(0x100)),
+        "unk_a8" / Int64ul
         # End of struct
     )
 
@@ -483,7 +482,7 @@ class CommandQueueInfo(ConstructClass):
         self.pending = 0
         self.unk_9c = 0
         self.set_prio(0)
-        self.tail = bytes(0x100)
+        self.unk_a8 = 0
 
     def set_prio(self, p):
         if p == 0:

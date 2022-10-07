@@ -12,7 +12,16 @@ from m1n1.trace.asc import ASCTracer, EP, EPState, msg, msg_log, DIR
 from m1n1.fw.afk.rbep import *
 from m1n1.fw.afk.epic import *
 
-trace_device("/arm-io/dcp", True, ranges=[1])
+if True:
+    dcp_adt_path = "/arm-io/dcp"
+    dcp_dart_adt_path = "/arm-io/dart-dcp"
+    disp0_dart_adt_path = "/arm-io/dart-disp0"
+else:
+    dcp_adt_path = "/arm-io/dcpext"
+    dcp_dart_adt_path = "/arm-io/dart-dcpext"
+    disp0_dart_adt_path = "/arm-io/dart-dispext0"
+
+trace_device(dcp_adt_path, True, ranges=[1])
 
 DARTTracer = DARTTracer._reloadcls()
 ASCTracer = ASCTracer._reloadcls()
@@ -128,15 +137,115 @@ class AFKEp(EP):
         self.state.rxbuf_info = (off, size)
         self.create_bufs()
 
+class SilentEp(AFKEp):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.state.verbose = 0
+
+    def log(self, msg):
+        pass
+
+def epic_service_cmd(group, cmd):
+    def f(x):
+        x.is_cmd = True
+        x.group = group
+        x.cmd = cmd
+        return x
+    return f
+
+def epic_service_reply(group, cmd):
+    def f(x):
+        x.is_reply = True
+        x.group = group
+        x.cmd = cmd
+        return x
+    return f
+
+class EPICServiceTracer(Reloadable):
+    def __init__(self, tracer, ep, key):
+        self.tracer = tracer
+        self.ep = ep
+        self.key = key
+
+        self.cmdmap = {}
+        self.replymap = {}
+        for name in dir(self):
+            i = getattr(self, name)
+            if not callable(i):
+                continue
+            if getattr(i, "is_cmd", False):
+                self.cmdmap[i.group, i.cmd] = getattr(self, name)
+            if getattr(i, "is_reply", False):
+                self.replymap[i.group, i.cmd] = getattr(self, name)
+
+    def log(self, msg):
+        self.ep.log(f"[{self.key}] {msg}")
+
+    def init(self, props):
+        pass
+
+    def handle_cmd(self, sgroup, scmd, sdata):
+        cmdfn = self.cmdmap.get((sgroup, scmd), None)
+        if cmdfn:
+            cmdfn(sdata)
+        else:
+            self.log(f"> unknown group {sgroup}; command {scmd}")
+            if sdata:
+                chexdump(sdata, print_fn=self.log)
+
+    def handle_reply(self, sgroup, scmd, sdata):
+        replyfn = self.replymap.get((sgroup, scmd), None)
+        if replyfn:
+            replyfn(sdata)
+        else:
+            self.log(f"< unknown group {sgroup}; command {scmd}")
+            if sdata:
+                chexdump(sdata, print_fn=self.log)
+
+    @epic_service_cmd(4, 4)
+    def getLocation(self, data):
+        self.log("> getLocation")
+    @epic_service_reply(4, 4)
+    def getLocation_reply(self, data):
+        self.log("< getLocation")
+
+    @epic_service_cmd(4, 5)
+    def getUnit(self, data):
+        self.log("> getUnit")
+    @epic_service_reply(4, 5)
+    def getUnit_reply(self, data):
+        self.log("< getUnit")
+
+    @epic_service_cmd(4, 6)
+    def open(self, data):
+        self.log("> open")
+    @epic_service_reply(4, 6)
+    def open_reply(self, data):
+        self.log("< open")
+
+    @epic_service_cmd(4, 7)
+    def close(self, data):
+        self.log("> close")
+    @epic_service_reply(4, 7)
+    def close_reply(self, data):
+        self.log("< close")
+
 class EPICEp(AFKEp):
+    SERVICES = []
+
+    def __init__(self, tracer, epid):
+        super().__init__(tracer, epid)
+
+        self.serv_map = {}
+        self.chan_map = {}
+        self.serv_names = {}
+        for i in self.SERVICES:
+            self.serv_names[i.NAME] = i
+
     def handle_ipc(self, data, dir=None):
         fd = BytesIO(data)
         hdr = EPICHeader.parse_stream(fd)
         sub = EPICSubHeader.parse_stream(fd)
-
-        self.log(f"{dir}Ch {hdr.channel} Type {hdr.type} Ver {hdr.version} Tag {hdr.seq}")
-        self.log(f"  Len {sub.length} Ver {sub.version} Cat {sub.category} Type {sub.type:#x} Seq {sub.seq}")
-        chexdump(data, print_fn=self.log)
 
         if sub.category == EPICCategory.REPORT:
             self.handle_report(hdr, sub, fd)
@@ -146,12 +255,33 @@ class EPICEp(AFKEp):
             self.handle_reply(hdr, sub, fd)
         elif sub.category == EPICCategory.COMMAND:
             self.handle_cmd(hdr, sub, fd)
+        else:
+            self.log(f"{dir}Ch {hdr.channel} Type {hdr.type} Ver {hdr.version} Tag {hdr.seq}")
+            self.log(f"  Len {sub.length} Ver {sub.version} Cat {sub.category} Type {sub.type:#x} Seq {sub.seq}")
+            chexdump(data, print_fn=self.log)
 
-    def handle_report(self, hdr, sub, fd):
-        if sub.type == 0x30:
+    def handle_report_init(self, hdr, sub, fd):
             init = EPICAnnounce.parse_stream(fd)
             self.log(f"Init: {init.name}")
             self.log(f"  Props: {init.props}")
+
+            if not init.props:
+                init.props = {}
+
+            name = init.props.get("EPICName", init.name)
+            key = name + str(init.props.get("EPICUnit", ""))
+            self.log(f"New service: {key} on channel {hdr.channel}")
+
+            srv_cls = self.serv_names.get(name, EPICServiceTracer)
+            srv = srv_cls(self.tracer, self, key)
+            srv.init(init.props)
+            srv.chan = hdr.channel
+            self.chan_map[hdr.channel] = srv
+            self.serv_map[key] = srv
+
+    def handle_report(self, hdr, sub, fd):
+        if sub.type == 0x30:
+            self.handle_report_init(hdr, sub, fd)
         else:
             self.log(f"Report {sub.type:#x}")
             chexdump(fd.read(), print_fn=self.log)
@@ -161,25 +291,50 @@ class EPICEp(AFKEp):
         chexdump(fd.read(), print_fn=self.log)
 
     def handle_reply(self, hdr, sub, fd):
-        cmd = EPICCmd.parse_stream(fd)
-        payload = fd.read()
-        self.log(f"Response {sub.type:#x}: {cmd.retcode:#x}")
-        if payload:
+        if sub.inline_len:
+            payload = fd.read()
             self.log("Inline payload:")
             chexdump(payload, print_fn=self.log)
-        if cmd.rxbuf:
-            self.log(f"RX buf @ {cmd.rxbuf:#x} ({cmd.rxlen:#x} bytes):")
-            chexdump(self.dart.ioread(0, cmd.rxbuf, cmd.rxlen), print_fn=self.log)
+        else:
+            cmd = EPICCmd.parse_stream(fd)
+            if not cmd.rxbuf:
+                self.log(f"Response {sub.type:#x}: {cmd.retcode:#x}")
+                return
+
+            data = self.dart.ioread(0, cmd.rxbuf, cmd.rxlen)
+            rgroup, rcmd, rlen, rmagic = struct.unpack("<2xHIII", data[:16])
+            if rmagic != 0x69706378:
+                self.log("Warning: Invalid EPICStandardService response magic")
+
+            srv = self.chan_map.get(hdr.channel, None)
+            if srv:
+                srv.handle_reply(rgroup, rcmd, data[64:64+rlen] if rlen else None)
+            else:
+                self.log(f"[???] < group {rgroup} command {rcmd}")
+                chexdump(data[64:64+rlen], print_fn=lambda msg: self.log(f"[???] {msg}"))
 
     def handle_cmd(self, hdr, sub, fd):
         cmd = EPICCmd.parse_stream(fd)
         payload = fd.read()
-        self.log(f"Command {sub.type:#x}: {cmd.retcode:#x}")
-        if payload:
-            chexdump(payload, print_fn=self.log)
-        if cmd.txbuf:
-            self.log(f"TX buf @ {cmd.txbuf:#x} ({cmd.txlen:#x} bytes):")
-            chexdump(self.dart.ioread(0, cmd.txbuf, cmd.txlen), print_fn=self.log)
+
+        if sub.type == 0xc0 and cmd.txbuf:
+            data = self.dart.ioread(0, cmd.txbuf, cmd.txlen)
+            sgroup, scmd, slen, sfooter  = struct.unpack("<2xHIII48x", data[:64])
+            sdata = data[64:64+slen] if slen else None
+
+            srv = self.chan_map.get(hdr.channel, None)
+            if srv:
+                srv.handle_cmd(sgroup, scmd, sdata)
+            else:
+                self.log(f"[???] > group {sgroup} command {scmd}")
+                chexdump(data[64:64+slen], print_fn=lambda msg: self.log(f"[???] {msg}"))
+        else:
+            self.log(f"Command {sub.type:#x}: {cmd.retcode:#x}")
+            if payload:
+                chexdump(payload, print_fn=self.log)
+            if cmd.txbuf:
+                self.log(f"TX buf @ {cmd.txbuf:#x} ({cmd.txlen:#x} bytes):")
+                chexdump(self.dart.ioread(0, cmd.txbuf, cmd.txlen), print_fn=self.log)
 
 KNOWN_MSGS = {
     "A000": "IOMFB::UPPipeAP_H13P::late_init_signal()",
@@ -701,26 +856,211 @@ class DCPExpertService(EPICEp):
 class Disp0Service(EPICEp):
     NAME = "disp0"
 
-class DPTXService(EPICEp):
-    NAME = "dptx"
+class DCPAVControllerEpicTracer(EPICServiceTracer):
+    NAME = "dcpav-controller-epic"
+
+    @epic_service_cmd(0, 14)
+    def getParticipatesPowerManagement(self, data):
+        self.log("> getParticipatesPowerManagement")
+    @epic_service_reply(0, 14)
+    def getParticipatesPowerManagement_reply(self, data):
+        self.log("< getParticipatesPowerManagement")
+        chexdump(data, print_fn=self.log)
+
+class DPAVController(EPICEp):
+    NAME = "dpavctrl"
+    SERVICES = [
+        DCPAVControllerEpicTracer
+    ]
 
 class DPSACService(EPICEp):
     NAME = "dpsac"
 
+
+class DCPDPDeviceEpicTracer(EPICServiceTracer):
+    NAME = "dcpdp-device-epic"
+
+    @epic_service_cmd(0, 15)
+    def getDeviceMatchingData(self, data):
+        self.log("> getDeviceMatchingData")
+    @epic_service_reply(0, 15)
+    def getDeviceMatchingData_reply(self, data):
+        self.log("< getDeviceMatchingData")
+        chexdump(data, print_fn=self.log)
+
 class DPDevService(EPICEp):
     NAME = "dpdev"
+    SERVICES = [
+        DCPDPDeviceEpicTracer
+    ]
 
-class MCDP29XXService(EPICEp):
-    NAME = "mcdp29xx"
+class DPAVService(EPICEp):
+    NAME = "dpavserv"
+
+class DCPAVAudioInterfaceEpicTracer(EPICServiceTracer):
+    NAME = "dcpav-audio-interface-epic"
+
+    # usually 4, 6 but apparently also 0, 6 here?
+    # or maybe a different open?
+    @epic_service_cmd(0, 6)
+    def open2(self, data):
+        self.log("> open")
+    @epic_service_reply(0, 6)
+    def open2_reply(self, data):
+        self.log("< open")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 8)
+    def prepareLink(self, data):
+        self.log("> prepareLink")
+    @epic_service_reply(0, 8)
+    def prepareLink_reply(self, data):
+        self.log("< prepareLink")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 9)
+    def startLink(self, data):
+        self.log("> startLink")
+    @epic_service_reply(0, 9)
+    def startLink_reply(self, data):
+        self.log("< startLink")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 15)
+    def getLinkStatus(self, data):
+        self.log("> getLinkStatus")
+    @epic_service_reply(0, 15)
+    def getLinkStatus_reply(self, data):
+        self.log("< getLinkStatus")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 16)
+    def getTransport(self, data):
+        self.log("> getTransport")
+    @epic_service_reply(0, 16)
+    def getTransport_reply(self, data):
+        self.log("< getTransport")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 17)
+    def getPortID(self, data):
+        self.log("> getPortID")
+    @epic_service_reply(0, 17)
+    def getPortID_reply(self, data):
+        self.log("< getPortID")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(1, 18)
+    def getElements(self, data):
+        self.log("> getElements")
+    @epic_service_reply(1, 18)
+    def getElements_reply(self, data):
+        self.log("< getElements")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(1, 20)
+    def getProductAttributes(self, data):
+        self.log("> getProductAttributes")
+    @epic_service_reply(1, 20)
+    def getProductAttributes_reply(self, data):
+        self.log("< getProductAttributes")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(1, 21)
+    def getEDIDUUID(self, data):
+        self.log("> getEDIDUUID")
+    @epic_service_reply(1, 21)
+    def getEDIDUUID_reply(self, data):
+        self.log("< getEDIDUUID")
+        chexdump(data, print_fn=self.log)
+
+    @epic_service_cmd(0, 22)
+    def getDataLatency(self, data):
+        self.log("> getDataLatency")
+    @epic_service_reply(0, 22)
+    def getDataLatency_reply(self, data):
+        self.log("< getDataLatency")
+        chexdump(data, print_fn=self.log)
+
 
 class AVService(EPICEp):
     NAME = "av"
+    SERVICES = [
+        DCPAVAudioInterfaceEpicTracer
+    ]
+
+class DCPDPTXHDCPAuthSessionTracer(EPICServiceTracer):
+    NAME = "dcpdptx-hdcp-auth-session"
+
+    @epic_service_cmd(4, 8)
+    def getProtocol(self, data):
+        self.log("> getProtocol")
+    @epic_service_reply(4, 8)
+    def getProtocol_reply(self, data):
+        self.log("< getProtocol")
+        chexdump(data, print_fn=self.log)
 
 class HDCPService(EPICEp):
     NAME = "hdcp"
+    SERVICES = [
+        DCPDPTXHDCPAuthSessionTracer
+    ]
 
 class RemoteAllocService(EPICEp):
     NAME = "remotealloc"
+
+class DCPDPTXRemotePortTarget(Register32):
+    CORE = 3, 0
+    ATC = 7, 4
+    DIE = 11, 8
+    CONNECTED = 15, 15
+
+class DCPDPTXPortEpicTracer(EPICServiceTracer):
+    NAME = "dcpdptx-port-epic"
+
+    @epic_service_cmd(0, 8)
+    def setPowerState(self, data):
+        self.log("> setPowerState")
+    @epic_service_reply(0, 8)
+    def setPowerState_reply(self, data):
+        self.log("< setPowerState")
+
+    @epic_service_cmd(0, 13)
+    def connectTo(self, data):
+        unk1, target = struct.unpack("<II24x", data)
+        target = DCPDPTXRemotePortTarget(target)
+        self.log(f"> connectTo(target={target}, unk1=0x{unk1:x})")
+    @epic_service_reply(0, 13)
+    def connectTo_reply(self, data):
+        unk1, target = struct.unpack("<II24x", data)
+        target = DCPDPTXRemotePortTarget(target)
+        self.log(f"< connectTo(target={target}, unk1=0x{unk1:x})")
+
+    @epic_service_cmd(0, 14)
+    def validateConnection(self, data):
+        unk1, target = struct.unpack("<II40x", data)
+        target = DCPDPTXRemotePortTarget(target)
+        self.log(f"> validateConnection(target={target}, unk1=0x{unk1:x})")
+    @epic_service_reply(0, 14)
+    def validateConnection_reply(self, data):
+        unk1, target = struct.unpack("<II40x", data)
+        target = DCPDPTXRemotePortTarget(target)
+        self.log(f"< validateConnection(target={target}, unk1=0x{unk1:x})")
+
+    @epic_service_cmd(8, 10)
+    def hotPlugDetectChangeOccurred(self, data):
+        unk = struct.unpack("<16x?15x", data)[0]
+        self.log(f"> hotPlugDetectChangeOccurred(unk={unk})")
+    @epic_service_reply(8, 10)
+    def hotPlugDetectChangeOccurred_reply(self, data):
+        unk = struct.unpack("<16x?15x", data)[0]
+        self.log(f"< hotPlugDetectChangeOccurred(unk={unk})")
+
+class DPTXPortService(EPICEp):
+    NAME = "dptxport"
+    SERVICES = [
+        DCPDPTXPortEpicTracer
+    ]
 
 class DCPTracer(ASCTracer):
     ENDPOINTS = {
@@ -728,13 +1068,13 @@ class DCPTracer(ASCTracer):
         0x21: TestService,
         0x22: DCPExpertService,
         0x23: Disp0Service,
-        0x24: DPTXService,
+        0x24: DPAVController,
         0x25: EPICEp, # dcpav-power-ep
         0x26: DPSACService,
         0x27: DPDevService,
-        0x28: MCDP29XXService,
+        0x28: DPAVService,
         0x29: AVService,
-        0x2a: EPICEp, # dcpdptx-port-ep
+        0x2a: DPTXPortService, # dcpdptx-port-ep
         0x2b: HDCPService,
         0x2c: EPICEp, # cb-ap-to-dcp-service-ep
         0x2d: RemoteAllocService,
@@ -745,10 +1085,12 @@ class DCPTracer(ASCTracer):
         super().handle_msg(direction, r0, r1)
         #iomon.poll()
 
-dart_dcp_tracer = DARTTracer(hv, "/arm-io/dart-dcp")
+
+
+dart_dcp_tracer = DARTTracer(hv, dcp_dart_adt_path)
 dart_dcp_tracer.start()
 
-dart_disp0_tracer = DARTTracer(hv, "/arm-io/dart-disp0")
+dart_disp0_tracer = DARTTracer(hv, disp0_dart_adt_path)
 dart_disp0_tracer.start()
 
 def readmem_iova(addr, size, readfn):
@@ -760,7 +1102,7 @@ def readmem_iova(addr, size, readfn):
 
 iomon.readmem = readmem_iova
 
-dcp_tracer = DCPTracer(hv, "/arm-io/dcp", verbose=1)
+dcp_tracer = DCPTracer(hv, dcp_adt_path, verbose=1)
 dcp_tracer.start(dart_dcp_tracer.dart)
 
 #dcp_tracer.ep.dcpep.state.dumpfile = open("dcp.log", "a")

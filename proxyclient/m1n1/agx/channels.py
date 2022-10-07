@@ -44,6 +44,9 @@ class GPURXChannel(GPUChannel):
         wptr = self.state.WRITE_PTR.val
         rptr = self.state.READ_PTR.val
 
+        if wptr >= self.ring_size:
+            raise Exception(f"wptr = {wptr:#x} > {self.ring_size:#x}")
+
         while rptr != wptr:
             msg = self.iface.readmem(self.ring_addr + self.item_size * rptr,
                                      self.item_size)
@@ -163,6 +166,9 @@ class GPULogChannel(GPURXChannel):
 
 class GPUKTraceChannel(GPURXChannel):
     MSG_CLASS = KTraceMsg
+
+    def handle_message(self, msg):
+        self.log(f"{msg}")
 
 class GPUStatsChannel(GPURXChannel):
     MSG_CLASS = HexDump(Bytes(0x60))

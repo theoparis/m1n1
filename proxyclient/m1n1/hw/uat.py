@@ -87,22 +87,48 @@ class Page_PTE(Register64):
     def set_offset(self, offset):
         self.OFFSET = offset >> 14
 
-    def access(self, el):
-        if el == 0:
-            return [["Xo", "RW", "Xo", "RX"],
-                    ["None", "RW", "None", "Ro"]][self.UXN][self.AP]
+    def access_fw(self, gl=False):
+        if not self.OS:
+            return [[
+                ["--", "--", "--", "--"],
+                ["--", "RW", "--", "RW"],
+                ["--", "RX", "--", "--"],
+                ["RX", "R-", "--", "R-"],
+            ], [
+                ["--", "--", "--", "RW"],
+                ["--", "--", "--", "RW"],
+                ["RX", "--", "--", "R-"],
+                ["RX", "RW", "--", "R-"],
+            ]][gl][self.AP][(self.UXN << 1) | self.PXN]
+        else:
+            return [
+                ["--", "R-", "-?", "RW"],
+                ["R-", "--", "RW", "RW"],
+                ["--", "--", "--", "--"],
+                ["--", "--", "--", "--"],
+            ][self.AP][(self.UXN << 1) | self.PXN]
 
-        return [["RW", "RW", "RX", "RX"],
-                ["RW", "RW", "Ro", "Ro"]][self.PXN][self.AP]
+    def access_gpu(self):
+        if not self.OS:
+            return "--"
+
+        return [
+            ["--", "R-", "-W", "RW"],
+            ["--", "--", "--", "R-"],
+            ["R-", "-W", "RW", "--"],
+            ["--", "--", "--", "--"],
+        ][self.AP][(self.UXN << 1) | self.PXN]
 
     def describe(self):
         if not self.valid():
             return f"<invalid> [{int(self)}:x]"
 
-        return f"{self.offset():x} [EL1={self.access(1)}, EL0={self.access(0)}, " \
-               f"PXN={self.PXN}, UXN={self.UXN}, AP={self.AP}, " \
-               f"{MemoryAttr(self.AttrIndex).name}, {['Global', 'Local'][self.nG]}, " \
-               f"Owner={['FW', 'OS'][self.OS]}, AF={self.AF}] ({self.value:#x})"
+        return (
+            f"{self.offset():x} [GPU={self.access_gpu()}, EL1={self.access_fw(0)}, GL1={self.access_fw(1)}, " +
+            f"perm={self.OS}{self.AP:02b}{self.UXN}{self.PXN}, " +
+            f"{MemoryAttr(self.AttrIndex).name}, {['Global', 'Local'][self.nG]}, " +
+            f"Owner={['FW', 'OS'][self.OS]}, AF={self.AF}, SH={self.SH}] ({self.value:#x})"
+        )
 
 class UatAccessor(Reloadable):
     def __init__(self, uat, ctx=0):
@@ -251,10 +277,6 @@ class UAT(Reloadable):
         self.ttbr0_base = self.u.memalign(self.PAGE_SIZE, self.PAGE_SIZE)
         self.ttbr1_base = self.sgx_dev.gfx_shared_region_base
         self.handoff = GFXHandoff(self.u)
-
-        # Clear out any stale kernel page tables
-        self.p.memset64(self.ttbr1_base + 0x10, 0, 0x3ff0)
-        self.u.inst("tlbi vmalle1os")
 
         self.VA_MASK = 0
         for (off, size, _) in self.LEVELS:
@@ -497,6 +519,11 @@ class UAT(Reloadable):
             return
 
         print("[UAT] Initializing...")
+
+        # Clear out any stale kernel page tables
+        self.p.memset64(self.ttbr1_base + 0x10, 0, 0x3ff0)
+        self.u.inst("tlbi vmalle1os")
+
         self.handoff.initialize()
 
         with self.handoff.lock():

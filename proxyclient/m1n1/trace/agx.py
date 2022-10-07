@@ -209,7 +209,7 @@ class FWCtlChannelTracer(ChannelTracer):
     RPTR = 0x00
 
 class CommandQueueTracer(Reloadable):
-    def __init__(self, tracer, info_addr):
+    def __init__(self, tracer, info_addr, new_queue):
         self.tracer = tracer
         self.uat = tracer.uat
         self.hv = tracer.hv
@@ -224,6 +224,9 @@ class CommandQueueTracer(Reloadable):
             tracer.state.queues[info_addr] = self.state
         else:
             self.state = tracer.state.queues[info_addr]
+
+        if new_queue:
+            self.state.rptr = 0
 
         self.update_info()
 
@@ -321,17 +324,13 @@ class AGXTracer(ASCTracer):
 
         self.trace_kernva = False
         self.trace_userva = False
+        self.trace_kernmap = True
         self.trace_usermap = True
         self.pause_after_init = False
         self.shell_after_init = False
         self.encoder_id_filter = None
         self.redump = False
 
-        self.clear_ttbr_tracers()
-        self.clear_uatmap_tracers()
-        self.add_ttbr_tracers()
-        self.add_uatmap_tracers()
-        self.clear_gpuvm_tracers()
         self.vmcnt = 0
         self.readlog = {}
         self.writelog = {}
@@ -341,13 +340,12 @@ class AGXTracer(ASCTracer):
         self.last_ta = None
         self.last_3d = None
 
-        self.add_mon_regions()
 
     def get_cmdqueue(self, info_addr, new_queue):
         if info_addr in self.cmdqueues and not new_queue:
             return self.cmdqueues[info_addr]
 
-        cmdqueue = CommandQueueTracer(self, info_addr)
+        cmdqueue = CommandQueueTracer(self, info_addr, new_queue)
         self.cmdqueues[info_addr] = cmdqueue
 
         return cmdqueue
@@ -356,7 +354,7 @@ class AGXTracer(ASCTracer):
         self.hv.clear_tracers(f"UATTTBRTracer")
 
     def add_ttbr_tracers(self):
-        self.hv.add_tracer(irange(self.gpu_region, 16 * 16),
+        self.hv.add_tracer(irange(self.gpu_region, UAT.NUM_CONTEXTS * 16),
                         f"UATTTBRTracer",
                         mode=TraceMode.WSYNC,
                         write=self.uat_write,
@@ -366,7 +364,7 @@ class AGXTracer(ASCTracer):
 
     def clear_uatmap_tracers(self, ctx=None):
         if ctx is None:
-            for i in range(16):
+            for i in range(UAT.NUM_CONTEXTS):
                 self.clear_uatmap_tracers(i)
         else:
             self.hv.clear_tracers(f"UATMapTracer/{ctx}")
@@ -374,15 +372,24 @@ class AGXTracer(ASCTracer):
     def add_uatmap_tracers(self, ctx=None):
         self.log(f"add_uatmap_tracers({ctx})")
         if ctx is None:
-            for i in range(16):
-                self.add_uatmap_tracers(i)
+            if self.trace_kernmap:
+                self.add_uatmap_tracers(0)
+            if self.trace_usermap:
+                for i in range(1, UAT.NUM_CONTEXTS):
+                    self.add_uatmap_tracers(i)
+            return
+
+        if ctx != 0 and not self.trace_usermap:
+            return
+        if ctx == 0 and not self.trace_kernmap:
             return
 
         def trace_pt(start, end, idx, pte, level, sparse):
-            if start >= 0xf8000000000 and ctx != 0:
+            if start >= 0xf8000000000 and (ctx != 0 or not self.trace_kernmap):
                 return
             if start < 0xf8000000000 and not self.trace_usermap:
                 return
+            self.log(f"Add UATMapTracer/{ctx} {start:#x}")
             self.hv.add_tracer(irange(pte.offset(), 0x4000),
                             f"UATMapTracer/{ctx}",
                             mode=TraceMode.WSYNC,
@@ -396,7 +403,7 @@ class AGXTracer(ASCTracer):
 
     def clear_gpuvm_tracers(self, ctx=None):
         if ctx is None:
-            for i in range(16):
+            for i in range(UAT.NUM_CONTEXTS):
                 self.clear_gpuvm_tracers(i)
         else:
             self.hv.clear_tracers(f"GPUVM/{ctx}")
@@ -404,8 +411,10 @@ class AGXTracer(ASCTracer):
     def add_gpuvm_tracers(self, ctx=None):
         self.log(f"add_gpuvm_tracers({ctx})")
         if ctx is None:
-            for i in range(16):
-                self.add_gpuvm_tracers(i)
+            self.add_gpuvm_tracers(0)
+            if self.trace_userva:
+                for i in range(1, UAT.NUM_CONTEXTS):
+                    self.add_gpuvm_tracers(i)
             return
 
         def trace_page(start, end, idx, pte, level, sparse):
@@ -459,6 +468,11 @@ class AGXTracer(ASCTracer):
             del self.va_to_pa[(ctx, level, iova)]
             return
 
+        if ctx != 0 and not self.trace_usermap:
+            return
+        if ctx == 0 and not self.trace_kernmap:
+            return
+
         self.va_to_pa[(ctx, level, iova)] = pte.offset()
         level -= 1
         self.hv.add_tracer(irange(pte.offset(), 0x4000),
@@ -488,7 +502,7 @@ class AGXTracer(ASCTracer):
         if paddr < 0x800000000:
             return # MMIO, ignore
 
-        if not self.trace_userva and ctx != 0 and iova < 0x6f_00000000:
+        if not self.trace_userva and ctx != 0 and iova < 0x80_00000000:
             return
         if not self.trace_kernva and ctx == 0:
             return
@@ -546,7 +560,15 @@ class AGXTracer(ASCTracer):
 
     def start(self):
         super().start()
-        self.handoff_tracer.start()
+
+        self.clear_ttbr_tracers()
+        self.clear_uatmap_tracers()
+        self.add_ttbr_tracers()
+        self.add_uatmap_tracers()
+        self.clear_gpuvm_tracers()
+        self.add_mon_regions()
+
+        #self.handoff_tracer.start()
         self.init_channels()
         if self.state.active:
             self.resume()
@@ -556,6 +578,9 @@ class AGXTracer(ASCTracer):
     def stop(self):
         self.pause()
         self.handoff_tracer.stop()
+        self.clear_ttbr_tracers()
+        self.clear_uatmap_tracers()
+        self.clear_gpuvm_tracers()
         super().stop()
 
     def mon_addva(self, ctx, va, size, name=""):
@@ -614,15 +639,17 @@ class AGXTracer(ASCTracer):
             self.last_3d = None
 
     def dump_buffer_manager(self, buffer_mgr, kread, read):
-            self.log(f"  buffer_mgr @ {buffer_mgr._addr:#x}: {buffer_mgr!s}")
-            self.log(f"    page_list @ {buffer_mgr.page_list_addr:#x}:")
-            chexdump(read(buffer_mgr.page_list_addr,
-                          buffer_mgr.page_list_size), print_fn=self.log)
-            self.log(f"    block_list @ {buffer_mgr.block_list_addr:#x}:")
-            chexdump(read(buffer_mgr.block_list_addr,
-                          0x8000), print_fn=self.log)
-            #self.log(f"    unkptr_d8 @ {buffer_mgr.unkptr_d8:#x}:")
-            #chexdump(read(buffer_mgr.unkptr_d8, 0x4000), print_fn=self.log)
+        return
+
+        self.log(f"  buffer_mgr @ {buffer_mgr._addr:#x}: {buffer_mgr!s}")
+        self.log(f"    page_list @ {buffer_mgr.page_list_addr:#x}:")
+        chexdump(read(buffer_mgr.page_list_addr,
+                        buffer_mgr.page_list_size), print_fn=self.log)
+        self.log(f"    block_list @ {buffer_mgr.block_list_addr:#x}:")
+        chexdump(read(buffer_mgr.block_list_addr,
+                        0x8000), print_fn=self.log)
+        #self.log(f"    unkptr_d8 @ {buffer_mgr.unkptr_d8:#x}:")
+        #chexdump(read(buffer_mgr.unkptr_d8, 0x4000), print_fn=self.log)
 
 
     def handle_ta(self, wi):
@@ -959,16 +986,16 @@ class AGXTracer(ASCTracer):
             return
         #self.channels = []
         for i, chan_info in enumerate(self.state.channel_info):
-            #if channelNames[i] == "Stats": # ignore stats
-                #continue
-            if channelNames[i] == "FWCtl": # ignore stats
+            print(channelNames[i], chan_info)
+            if channelNames[i] == "Stats": # ignore stats
+                continue
+            elif channelNames[i] == "KTrace": # ignore KTrace
+                continue
+            elif channelNames[i] == "FWCtl":
                 channel_chan = FWCtlChannelTracer(self, chan_info, i)
             else:
                 channel_chan = ChannelTracer(self, chan_info, i)
             self.channels.append(channel_chan)
-            #for i, (msg, size, count) in enumerate(channel_chan.channel.ring_defs):
-            #    self.mon_addva(0, chan_info.state_addr + i * 0x30, 0x30, f"chan[{channel_chan.name}]->state[{i}]")
-            #    self.mon_addva(0, channel_chan.channel.rb_base[i], size * count, f"chan[{channel_chan.name}]->ringbuffer[{i}]")
 
     def pause(self):
         self.clear_gpuvm_tracers()
@@ -1064,6 +1091,7 @@ class AGXTracer(ASCTracer):
         if self.pause_after_init:
             self.log("Pausing tracing")
             self.pause()
+            self.stop()
         if self.shell_after_init:
             self.hv.run_shell()
 
