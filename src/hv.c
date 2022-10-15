@@ -69,7 +69,6 @@ void hv_init(void)
     hv_write_hcr(HCR_API | // Allow PAuth instructions
                  HCR_APK | // Allow PAuth key registers
                  HCR_TEA | // Trap external aborts
-                 HCR_E2H | // VHE mode (forced)
                  HCR_RW |  // AArch64 guest
                  HCR_AMO | // Trap SError exceptions
                  HCR_IMO | // Trap IRQ exceptions (for now)
