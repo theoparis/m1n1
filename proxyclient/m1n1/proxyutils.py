@@ -22,10 +22,10 @@ SIMD_Q = Array(32, BytesInteger(16, swapped=True))
 # This isn't perfect, since multiple versions could have the same
 # iBoot version, but it's good enough
 VERSION_MAP = {
-    "iBoot-7429.61.2": "12.1",
-    "iBoot-7459.101.2": "12.3",
-    "iBoot-7459.101.3": "12.4",
-    "iBoot-8419.0.151.0.1": "13.0 beta4",
+    "iBoot-7429.61.2": "V12_1",
+    "iBoot-7459.101.2": "V12_3",
+    "iBoot-7459.121.3": "V12_4",
+    "iBoot-8419.0.151.0.1": "V13_0B4",
 }
 
 class ProxyUtils(Reloadable):
@@ -51,6 +51,10 @@ class ProxyUtils(Reloadable):
             # Compat with versions that don't have heapblock yet
             self.heap_base = (self.base + ((self.ba.top_of_kernel_data + 0xffff) & ~0xffff) -
                               self.ba.phys_base)
+
+        if os.environ.get("M1N1HEAP", ""):
+            self.heap_base = int(os.environ.get("M1N1HEAP", ""), 16)
+
         self.heap_base += 128 * 1024 * 1024 # We leave 128MB for m1n1 heap
         self.heap_top = self.heap_base + self.heap_size
         self.heap = Heap(self.heap_base, self.heap_top)

@@ -3,10 +3,13 @@
 #include "dart.h"
 #include "adt.h"
 #include "assert.h"
+#include "devicetree.h"
 #include "malloc.h"
 #include "memory.h"
 #include "string.h"
 #include "utils.h"
+
+#include "libfdt/libfdt.h"
 
 #define DART_T8020_CONFIG      0x60
 #define DART_T8020_CONFIG_LOCK BIT(15)
@@ -74,6 +77,9 @@
 #define DART_T8110_TLB_CMD_OP_FLUSH_ALL 0
 #define DART_T8110_TLB_CMD_OP_FLUSH_SID 1
 #define DART_T8110_TLB_CMD_STREAM       GENMASK(7, 0)
+
+#define DART_T8110_PROTECT          0x200
+#define DART_T8110_PROTECT_TTBR_TCR BIT(0)
 
 #define DART_T8110_ENABLE_STREAMS  0xc00
 #define DART_T8110_DISABLE_STREAMS 0xc20
@@ -314,6 +320,73 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
                    dart->l1[i]);
         }
     }
+
+    return dart;
+}
+
+void dart_lock_adt(const char *path, int instance)
+{
+    int dart_path[8];
+    int node = adt_path_offset_trace(adt, path, dart_path);
+    if (node < 0) {
+        printf("dart: Error getting DART node %s\n", path);
+        return;
+    }
+
+    u64 base;
+    if (adt_get_reg(adt, dart_path, "reg", instance, &base, NULL) < 0) {
+        printf("dart: Error getting DART %s base address.\n", path);
+        return;
+    }
+
+    if (adt_is_compatible(adt, node, "dart,t8020") || adt_is_compatible(adt, node, "dart,t6000")) {
+        if (!(read32(base + DART_T8020_CONFIG) & DART_T8020_CONFIG_LOCK))
+            set32(base + DART_T8020_CONFIG, DART_T8020_CONFIG_LOCK);
+    } else if (adt_is_compatible(adt, node, "dart,t8110")) {
+        if (!(read32(base + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR))
+            set32(base + DART_T8110_PROTECT, DART_T8110_PROTECT_TTBR_TCR);
+    } else {
+        printf("dart: dart %s at 0x%lx is of an unknown type\n", path, base);
+    }
+}
+
+dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts)
+{
+    int node = fdt_node_offset_by_phandle(dt, phandle);
+    if (node < 0) {
+        printf("FDT: node for phandle %u not found\n", phandle);
+        return NULL;
+    }
+
+    u64 base = dt_get_address(dt, node);
+    if (!base)
+        return NULL;
+
+    enum dart_type_t type;
+    const char *type_s;
+    const char *name = fdt_get_name(dt, node, NULL);
+
+    if (fdt_node_check_compatible(dt, node, "apple,t8103-dart") == 0) {
+        type = DART_T8020;
+        type_s = "t8020";
+    } else if (fdt_node_check_compatible(dt, node, "apple,t6000-dart") == 0) {
+        type = DART_T6000;
+        type_s = "t6000";
+    } else if (fdt_node_check_compatible(dt, node, "apple,t8110-dart") == 0) {
+        type = DART_T8110;
+        type_s = "t8110";
+    } else {
+        printf("dart: dart %s at 0x%lx is of an unknown type\n", name, base);
+        return NULL;
+    }
+
+    dart_dev_t *dart = dart_init(base, device, keep_pts, type);
+
+    if (!dart)
+        return NULL;
+
+    printf("dart: dart %s at 0x%lx is a %s%s\n", name, base, type_s,
+           dart->locked ? " (locked)" : "");
 
     return dart;
 }
@@ -559,10 +632,10 @@ u64 dart_search(dart_dev_t *dart, void *paddr)
         }
     }
 
-    return 0;
+    return DART_PTR_ERR;
 }
 
-s64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
+u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
 {
     if (len % SZ_16K)
         return -1;
@@ -588,7 +661,7 @@ s64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
             iova += SZ_16K;
     }
 
-    return -1;
+    return DART_PTR_ERR;
 }
 
 void dart_shutdown(dart_dev_t *dart)

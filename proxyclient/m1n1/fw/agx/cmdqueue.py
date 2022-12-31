@@ -73,19 +73,18 @@ class EventControl(ConstructClass):
         "unk_14" / Int32ul,
         "unk_18" / Int64ul,
         "unk_20" / Int32ul,
-        "unk_24" / Int32ul,
+        "vm_slot" / Int32ul,
         "has_ta" / Int32ul,
-        "pstamp_ta" / Int64ul,
-        "unk_ta" / HexDump(Bytes(0x18)),
+        "pstamp_ta" / Array(4, Int64ul),
         "has_3d" / Int32ul,
-        "pstamp_3d" / Int64ul,
-        "unk_3d" / HexDump(Bytes(0x18)),
+        "pstamp_3d" / Array(4, Int64ul),
         "has_cp" / Int32ul,
-        "pstamp_cp" / Int64ul,
-        "unk_cp" / HexDump(Bytes(0x18)),
+        "pstamp_cp" / Array(4, Int64ul),
         "in_list" / Int32ul,
+        Ver("G >= G14", "unk_98_g14_0" / HexDump(Bytes(0x14))),
         "list_head" / LinkedListHead,
-        "unk_buf" / EventControlUnkBuf,
+        Ver("G >= G14", "unk_a8_g14_0" / Padding(4)),
+        Ver("V >= V13_0B4", "unk_buf" / EventControlUnkBuf),
     )
 
     def __init__(self):
@@ -93,17 +92,15 @@ class EventControl(ConstructClass):
         self.unk_14 = 0
         self.unk_18 = 0
         self.unk_20 = 0
-        self.unk_24 = 0
+        self.vm_slot = 0
         self.has_ta = 0
-        self.pstamp_ta = 0
-        self.unk_ta = bytes(24)
+        self.pstamp_ta = [0]*4
         self.has_3d = 0
-        self.pstamp_3d = 0
-        self.unk_3d = bytes(24)
+        self.pstamp_3d = [0]*4
         self.has_cp = 0
-        self.pstamp_cp = 0
-        self.unk_cp = bytes(24)
+        self.pstamp_cp = [0]*4
         self.in_list = 0
+        self.unk_98_g14_0 = bytes(0x14)
         self.list_head = LinkedListHead()
         self.unk_buf = EventControlUnkBuf()
 
@@ -204,7 +201,7 @@ class WorkCommand3D(ConstructClass):
     subcon = Struct(
         "addr" / Tell,
         "magic" / Const(0x1, Hex(Int32ul)),
-        Ver("13.0 beta4", "counter" / Int64ul),
+        Ver("V >= V13_0B4", "counter" / Int64ul),
         "context_id" / Hex(Int32ul),
         "unk_8" / Hex(Int32ul),
         "microsequence_ptr" / Hex(Int64ul), # Command list
@@ -224,8 +221,8 @@ class WorkCommand3D(ConstructClass):
         "tile_blocks_x" / Hex(Int16ul), # * 4
         "unk_50" / Hex(Int64ul),
         "unk_58" / Hex(Int64ul),
-        "uuid1" / Hex(Int32ul), # same across repeated submits
-        "uuid2" / Hex(Int32ul), # same across repeated submits
+        "merge_upper_x" / Hex(Float32l),
+        "merge_upper_y" / Hex(Float32l),
         "unk_68" / Hex(Int64ul),
         "tile_count" / Hex(Int64ul),
 
@@ -246,11 +243,11 @@ class WorkCommand3D(ConstructClass):
         "unk_918" / Int64ul,
         "unk_920" / Int32ul,
         "unk_924" / Int32ul,
-        Ver("13.0 beta4", "unk_928_0" / Int32ul),
-        Ver("13.0 beta4", "unk_928_4" / Int8ul),
-        Ver("13.0 beta4", "ts_flag" / TsFlag),
-        Ver("13.0 beta4", "unk_5e6" / Default(Int16ul, 0)),
-        Ver("13.0 beta4", "unk_5e8" / Default(HexDump(Bytes(0x20)), bytes(0x20))),
+        Ver("V >= V13_0B4", "unk_928_0" / Int32ul),
+        Ver("V >= V13_0B4", "unk_928_4" / Int8ul),
+        Ver("V >= V13_0B4", "ts_flag" / TsFlag),
+        Ver("V >= V13_0B4", "unk_5e6" / Default(Int16ul, 0)),
+        Ver("V >= V13_0B4", "unk_5e8" / Default(HexDump(Bytes(0x20)), bytes(0x20))),
         "pad_928" / Default(HexDump(Bytes(0x18)), bytes(0x18)),
     )
 
@@ -287,7 +284,7 @@ class WorkCommandTA(ConstructClass):
     subcon = Struct(
         "addr" / Tell,
         "magic" / Const(0x0, Hex(Int32ul)),
-        Ver("13.0 beta4", "counter" / Int64ul),
+        Ver("V >= V13_0B4", "counter" / Int64ul),
         "context_id" / Hex(Int32ul),
         "unk_8" / Hex(Int32ul),
         "event_control_addr" / Hex(Int64ul),
@@ -328,13 +325,13 @@ class WorkCommandTA(ConstructClass):
         "unk_5d0" / Int32ul,
         "unk_5d4" / Int8ul,
         "pad_5d5" / Default(HexDump(Bytes(0x3)), bytes(0x3)),
-        Ver("13.0 beta4", "unk_5e0" / Int32ul),
-        Ver("13.0 beta4", "unk_5e4" / Int8ul),
-        Ver("13.0 beta4", "ts_flag" / TsFlag),
-        Ver("13.0 beta4", "unk_5e6" / Default(Int16ul, 0)),
-        Ver("13.0 beta4", "unk_5e8" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
+        Ver("V >= V13_0B4", "unk_5e0" / Int32ul),
+        Ver("V >= V13_0B4", "unk_5e4" / Int8ul),
+        Ver("V >= V13_0B4", "ts_flag" / TsFlag),
+        Ver("V >= V13_0B4", "unk_5e6" / Default(Int16ul, 0)),
+        Ver("V >= V13_0B4", "unk_5e8" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
         "pad_5d8" / Default(HexDump(Bytes(0x8)), bytes(0x8)),
-        Ver("13.0 beta4", "pad_5e0" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
+        Ver("V >= V13_0B4", "pad_5e0" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
     )
 
 class UnknownWorkCommand(ConstructClass):
@@ -370,7 +367,8 @@ class JobList(ConstructClass):
 
 class GPUContextData(ConstructClass):
     subcon = Struct(
-        "unk_0" / Int16ul,
+        "unk_0" / Int8ul,
+        "unk_1" / Int8ul,
         "unk_2" / Default(Bytes(3), bytes(3)),
         "unk_5" / Int8ul,
         "unk_6" / Default(Bytes(0x18), bytes(0x18)),
@@ -382,7 +380,8 @@ class GPUContextData(ConstructClass):
     )
 
     def __init__(self):
-        self.unk_0 = 0xffff
+        self.unk_0 = 0xff
+        self.unk_1 = 0xff
         self.unk_5 = 1
         self.unk_1e = 0xff
         self.unk_1f = 0
@@ -407,7 +406,6 @@ class CommandQueuePointers(ConstructClass):
         ZPadding(12),
         "rb_size" / Int32ul,
         ZPadding(12),
-        "unk" / Default(Bytes(0x2800), bytes(0x2800)),
     )
 
     def __init__(self):

@@ -15,10 +15,14 @@ from m1n1.fw.dcp.manager import DCPManager
 from m1n1.fw.dcp.ipc import ByRef
 from m1n1.proxyutils import RegMonitor
 
-is_t8103 = u.adt["arm-io"].compatible[0] == "arm-io,t8103"
+disp_name = "/arm-io/disp0"
+
+external = hasattr(u.adt[disp_name], "external") and u.adt[disp_name].external != 0
+compat = u.adt[disp_name].compatible[0].split(",")[-1]
+
 mon = RegMonitor(u)
 
-if is_t8103:
+if compat == 't8103':
     #mon.add(0x230000000, 0x18000)
     #mon.add(0x230018000, 0x4000)
     #mon.add(0x230068000, 0x8000)
@@ -67,6 +71,30 @@ if is_t8103:
 
     mon.add(0x230845840, 0x40) # error regs
 
+def get_color_mode(mgr):
+    best_id = None
+    best_score = -1
+    for mode in mgr.dcpav_prop['ColorElements']:
+        if mode['IsVirtual']:
+            continue
+        if mode['Depth'] != 8:
+            continue
+        if mode['Score'] > best_score:
+            best_score = mode['Score']
+            best_id =  mode['ID']
+    return best_id
+
+def get_timing_mode(mgr):
+    best_id = None
+    best_score = -1
+    for mode in mgr.dcpav_prop['TimingElements']:
+        if mode['IsVirtual']:
+            continue
+        if int(mode['Score']) > best_score:
+            best_score = int(mode['Score'])
+            best_id =  int(mode['ID'])
+    return best_id
+
 mon.poll()
 
 dart = DART.from_adt(u, "arm-io/dart-dcp")
@@ -85,7 +113,7 @@ dcp.start()
 dcp.start_ep(0x37)
 dcp.dcpep.initialize()
 
-mgr = DCPManager(dcp.dcpep)
+mgr = DCPManager(dcp.dcpep, compat)
 
 mon.poll()
 
@@ -104,31 +132,38 @@ assert mgr.setPowerState(1, False, ByRef(0)) == 0
 
 mon.poll()
 
-if is_t8103:
+if external:
     assert mgr.set_display_device(2) == 0
 else:
     assert mgr.set_display_device(0) == 2
 assert mgr.set_parameter_dcp(14, [0], 1) == 0
-#mgr.set_digital_out_mode(86, 38)
 
-if is_t8103:
+color_mode = get_color_mode(mgr)
+timing_mode = get_timing_mode(mgr)
+mgr.SetDigitalOutMode(color_mode, timing_mode)
+mon.poll()
+
+while mgr.iomfb_prop['DPTimingModeId'] != timing_mode:
+    print("Try re-setting mode")
+    mgr.SetDigitalOutMode(color_mode, timing_mode)
+    mon.poll()
+
+if external:
     assert mgr.set_display_device(2) == 0
 else:
     assert mgr.set_display_device(0) == 2
 assert mgr.set_parameter_dcp(14, [0], 1) == 0
-#mgr.set_digital_out_mode(89, 38)
 
 t = ByRef(b"\x00" * 0xc0c)
 assert mgr.get_gamma_table(t) == 2
 assert mgr.set_contrast(0) == 0
 assert mgr.setBrightnessCorrection(65536) == 0
 
-if is_t8103:
+if external:
     assert mgr.set_display_device(2) == 0
 else:
     assert mgr.set_display_device(0) == 2
 assert mgr.set_parameter_dcp(14, [0], 1) == 0
-#mgr.set_digital_out_mode(89, 72)
 
 mon.poll()
 
@@ -170,6 +205,9 @@ swap_rec = Container(
     dst_rect = [[0, 0, width, height],[0,0,0,0],[0,0,0,0],[0,0,0,0]],
     swap_enabled = 0x80000007,
     swap_completed = 0x80000007,
+    bl_unk = 0x1,
+    bl_val = 0x58f058d0, # ~99 nits
+    bl_power = 0x40,
 )
 
 surf = Container(
@@ -277,7 +315,7 @@ swaps = mgr.swaps
 mon.poll()
 
 fb_size = align_up(width * height * 4, 8 * 0x4000)
-print(f"Dispaly {width}x{height}, fb size: {fb_size}")
+print(f"Display {width}x{height}, fb size: {fb_size}")
 
 buf = u.memalign(0x4000, fb_size)
 

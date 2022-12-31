@@ -6,10 +6,15 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import atexit, sys
 
+from m1n1.setup import *
+from m1n1.constructutils import Ver
+from m1n1.utils import *
+
+Ver.set_version(u)
+
 from m1n1.agx import AGX
 from m1n1.agx.render import *
 
-from m1n1.setup import *
 from m1n1 import asm
 
 from m1n1.gpiola import GPIOLogicAnalyzer
@@ -23,6 +28,12 @@ p.mmu_init_secondary(analyzer_cpu)
 iface.dev.timeout = 42
 
 agx = AGX(u)
+
+def initdata_hook(agx):
+    agx.initdata.regionC.idle_to_off_timeout_ms = 20000
+    agx.initdata.regionC.push()
+
+agx.initdata_hook = initdata_hook
 
 mon = RegMonitor(u, ascii=True, bufsize=0x8000000)
 agx.mon = mon
@@ -144,11 +155,16 @@ regs.update({
     "c_118d8":  t(agx.initdata.regionC._addr + 0x118d8),
     "c_118dc":  t(agx.initdata.regionC._addr + 0x118dc),
     "3d_cmds":  t(agx.initdata.regionB.stats_3d.addrof("total_cmds")),
-    "3d_cq":    t(agx.initdata.regionB.stats_3d.stats.addrof("cur_cmdqueue")),
+    #"3d_cq":    t(agx.initdata.regionB.stats_3d.stats.addrof("cur_cmdqueue")),
     #"3d_tvb_oflws_1":   t(agx.initdata.regionB.stats_3d.stats.addrof("tvb_overflows_1")),
     #"3d_tvb_oflws_2":   t(agx.initdata.regionB.stats_3d.stats.addrof("tvb_overflows_2")),
-    "3d_cur_stamp_id":  t(agx.initdata.regionB.stats_3d.stats.addrof("cur_stamp_id")),
+    #"3d_cur_stamp_id":  t(agx.initdata.regionB.stats_3d.stats.addrof("cur_stamp_id")),
     "3d_ts":    t(agx.initdata.regionB.stats_3d.stats.addrof("unk_timestamp")),
+    "hoff_lock": agx.uat.handoff.reg.LOCK_AP.addr,
+    "hoff_ctx": agx.uat.handoff.reg.CUR_CTX.addr,
+    "hoff_unk2": agx.uat.handoff.reg.UNK2.addr,
+    "hoff_unk3_lo": agx.uat.handoff.reg.UNK3.addr,
+    "hoff_unk3_hi": agx.uat.handoff.reg.UNK3.addr + 4,
 })
 
 for i, r in enumerate(renderers):
@@ -172,12 +188,12 @@ for i, r in enumerate(renderers):
         f"r{i}_3d_stamp2":t(r.stamp_3d2._addr),
     })
 
-    for j in range(FRAMES):
-        work = r.work[j]
-        regs.update({
-            f"r{i}_f{j}_3d_ts": t(work.wc_3d.ts1._addr),
-            f"r{i}_f{j}_ta_ts": t(work.wc_ta.ts1._addr),
-        })
+    #for j in range(FRAMES):
+        #work = r.work[j]
+        #regs.update({
+            #f"r{i}_f{j}_3d_ts": t(work.wc_3d.ts1._addr),
+            #f"r{i}_f{j}_ta_ts": t(work.wc_ta.ts1._addr),
+        #})
 
 div=4
 ticks = 24000000 // div * 25

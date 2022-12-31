@@ -62,7 +62,7 @@ class DCPBaseManager:
         return functools.partial(method.call, rpc)
 
 class DCPManager(DCPBaseManager):
-    def __init__(self, dcpep):
+    def __init__(self, dcpep, compatible='t8103'):
         super().__init__(dcpep)
 
         self.iomfb_prop = {}
@@ -75,6 +75,8 @@ class DCPManager(DCPBaseManager):
 
         self.mapid = 0
         self.bufs = {}
+
+        self.compatible = compatible
 
     ## IOMobileFramebufferAP methods
 
@@ -112,10 +114,21 @@ class DCPManager(DCPBaseManager):
         self.swaps += 1
         self.frame = swap_id
 
-    def swap_complete_intent_gated(self, frame, unkB, unkInt, width, height):
-        print(f"swap_complete_intent_gated({frame}, {unkB}, {unkInt}, {width}, {height}")
+    def swap_complete_intent_gated(self, swap_id, unkB, unkInt, width, height):
+        print(f"swap_complete_intent_gated({swap_id}, {unkB}, {unkInt}, {width}, {height}")
         self.swaps += 1
-        self.frame = frame
+        self.frame = swap_id
+
+    def enable_backlight_message_ap_gated(self, unkB):
+        print(f"enable_backlight_message_ap_gated({unkB})")
+
+    # wrapper for set_digital_out_mode to print information on the setted modes
+    def SetDigitalOutMode(self, color_id, timing_id):
+        color_mode = [x for x in self.dcpav_prop['ColorElements'] if x['ID'] == color_id][0]
+        timing_mode = [x for x in self.dcpav_prop['TimingElements'] if x['ID'] == timing_id][0]
+        pprint.pprint(color_mode)
+        pprint.pprint(timing_mode)
+        self.set_digital_out_mode(color_id, timing_id)
 
     ## UPPipeAP_H13P methods
 
@@ -130,18 +143,34 @@ class DCPManager(DCPBaseManager):
 
     def rt_bandwidth_setup_ap(self, config):
         print("rt_bandwidth_setup_ap(...)")
-        config.val = {
-            "reg1": 0x23b738014, # reg[5] in disp0/dispext0, plus 0x14 - part of pmgr
-            "reg2": 0x23bc3c000, # reg[6] in disp0/dispext0 - part of pmp/pmgr
-            "bit": 2,
-        }
+        if self.compatible == 't8103':
+            config.val = {
+                "reg1": 0x23b738014, # reg[5] in disp0/dispext0, plus 0x14 - part of pmgr
+                "reg2": 0x23bc3c000, # reg[6] in disp0/dispext0 - part of pmp/pmgr
+                "bit": 2,
+            }
+        elif self.compatible == 't600x':
+            config.val = {
+                "reg1": 0x28e3d0000 + 0x988, # reg[4] in disp0/dispext0, plus 0x988
+                "reg2": 0x0,
+                "bit": 0,
+            }
+        else:
+            raise ValueError(self.compatible)
+
     ## UnifiedPipeline2 methods
 
     def match_pmu_service(self):
         pass
 
+    def set_number_property(self, key, value):
+        pass
+
     def create_provider_service(self):
         return True
+
+    def is_dark_boot(self):
+        return False
 
     def read_edt_data(self, key, count, value):
         return False
@@ -178,7 +207,7 @@ class DCPManager(DCPBaseManager):
         assert self.dcpav_prop_len == len(blob)
         self.dcpav_prop[key] = ipc.OSSerialize().parse(blob)
         self.dcpav_prop_data = self.dcpav_prop_len = self.dcpav_prop_off = None
-        pprint.pprint(self.dcpav_prop[key])
+        #pprint.pprint(self.dcpav_prop[key])
         return True
 
     def set_boolean_property(self, key, value):
@@ -215,6 +244,9 @@ class DCPManager(DCPBaseManager):
     def get_calendar_time_ms(self):
         return time.time_ns() // 1000_000
 
+    def update_backlight_factor_prop(self, value):
+        pass
+
     def map_buf(self, buf, vaddr, dva, unk):
         print(f"map buf {buf}, {unk}")
         paddr, dcpdva, dvasize = self.bufs[buf]
@@ -222,6 +254,9 @@ class DCPManager(DCPBaseManager):
         dva.val = self.dcp.disp_dart.iomap(4, paddr, dvasize)
         print(f"mapped to dva {dva}")
         return 0
+
+    def update_backlight_factor_prop(self, unk):
+        print(f"update_backlight_factor_prop {unk}")
 
     ## ServiceRelay methods
 

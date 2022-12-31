@@ -111,7 +111,6 @@ class HV(Reloadable):
         self.hvcall_handlers = {}
         self.switching_context = False
         self.show_timestamps = False
-        self.trace_tlbos = False
 
     def _reloadme(self):
         super()._reloadme()
@@ -364,7 +363,7 @@ class HV(Reloadable):
         while True:
             try:
                 return func()
-            except:
+            except Exception:
                 print(f"Exception in {description}")
                 traceback.print_exc()
 
@@ -652,6 +651,9 @@ class HV(Reloadable):
             ACC_CFG_EL1,
             ACC_OVRD_EL1,
         }
+        xlate = {
+            DC_CIVAC,
+        }
         for i in range(len(self._bps)):
             shadow.add(DBGBCRn_EL1(i))
             shadow.add(DBGBVRn_EL1(i))
@@ -692,6 +694,8 @@ class HV(Reloadable):
                     value = ctx.regs[iss.Rt]
                 enc2 = self.MSR_REDIRECTS.get(enc, enc)
                 sys.stdout.flush()
+                if enc in xlate:
+                    value = self.p.hv_translate(value, True, False)
                 self.u.msr(enc2, value, call=self.p.gl2_call)
                 self.log(f"Pass: msr {name}, x{iss.Rt} = {value:x} (OK) ({sysreg_name(enc2)})")
 
@@ -1313,8 +1317,7 @@ class HV(Reloadable):
         hcr.TVM = 0
         hcr.FMO = 1
         hcr.IMO = 0
-        if self.trace_tlbos:
-            hcr.TTLBOS = 1
+        hcr.TTLBOS = 1
         self.u.msr(HCR_EL2, hcr.value)
 
         # Trap dangerous things

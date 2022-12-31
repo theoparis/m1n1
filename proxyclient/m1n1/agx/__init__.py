@@ -36,6 +36,8 @@ class AGX:
 
         self.log("Initializing allocations")
 
+        self.aic_base = u.adt["/arm-io/aic"].get_reg(0)[0]
+
         self.all_objects = {}
         self.tracked_objects = {}
 
@@ -77,6 +79,8 @@ class AGX:
         self.event_mgr = GPUEventManager(self)
 
         self.p.iodev_set_usage(IODEV.FB, 0)
+
+        self.initdata_hook = None
 
         # Early init, needed?
         self.poke_sgx()
@@ -185,6 +189,14 @@ class AGX:
     def kick_firmware(self):
         self.asc.db.doorbell(0x10)
 
+    def show_irqs(self):
+        hw_state = self.aic_base + 0x4200
+        irqs = []
+        for irq in self.sgx_dev.interrupts:
+            v = int(bool((self.p.read32(hw_state + (irq // 32) * 4) & (1 << (irq % 32)))))
+            irqs.append(v)
+        self.log(f' SGX IRQ state: {irqs}')
+
     def timeout(self, msg):
         if self.mon:
             self.mon.poll()
@@ -204,6 +216,7 @@ class AGX:
         self.log(f' Fault info:')
         self.log(self.initdata.regionC.fault_info)
 
+        self.show_irqs()
         self.check_fault()
         self.recover()
 
@@ -225,6 +238,7 @@ class AGX:
         self.log(f' Fault info:')
         self.log(self.initdata.regionC.fault_info)
 
+        self.show_irqs()
         self.check_fault()
         self.recover()
 
@@ -248,6 +262,10 @@ class AGX:
             raise Exception("Got fault notification, but fault address is unreadable")
 
         self.log(f" Fault info: {fault_info}")
+
+        if not fault_info.FAULTED:
+            return
+
         fault_addr = fault_info.ADDR
         if fault_addr & 0x8000000000:
             fault_addr |= 0xffffff8000000000
@@ -269,8 +287,9 @@ class AGX:
             status.resume.val = 1
         else:
             raise Exception("Cannot recover")
+        self.show_irqs()
 
-    def start(self):
+    def resume(self):
         self.log("Starting ASC")
         self.asc.start()
 
@@ -278,10 +297,16 @@ class AGX:
         self.asc.start_ep(0x20)
         self.asc.start_ep(0x21)
 
+    def start(self):
+        self.resume()
+
         self.init_channels()
 
         self.log("Building initdata")
         self.initdata = build_initdata(self)
+        if self.initdata_hook:
+            self.initdata_hook(self)
+
         self.fw_status = self.initdata.fw_status.regmap()
         self.uat.flush_dirty()
 

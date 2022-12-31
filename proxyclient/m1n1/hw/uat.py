@@ -18,13 +18,21 @@ import traceback
 __all__ = []
 
 class MemoryAttr(IntEnum):
+    # ff = Normal, Outer Writeback RW, Inner Writeback RW
     Normal = 0 # Only accessed by the gfx-asc coprocessor
+    # 00 = Device nGnRnE
     Device = 1
+    # f4 = Normal, Outer Writeback RW, Inner NC
     Shared = 2 # Probally Outer-shareable. Shared with either the main cpu or AGX hardware
+    # 4f = Normal, Outer NC, Inner Writeback RW
     UNK3 = 3
+    # 00 = Device nGnRnE
     UNK4 = 4
+    # ff = Normal, Outer Writeback RW, Inner Writeback RW
     UNK5 = 5
+    # 00 = Device nGnRnE
     UNK6 = 6
+    # 00 = Device nGnRnE
     UNK7 = 7
 
 
@@ -267,11 +275,11 @@ class UAT(Reloadable):
         self.hv = hv
         self.pt_cache = {}
         self.dirty = set()
+        self.dirty_ranges = {}
         self.allocator = None
         self.ttbr = None
         self.initialized = False
         self.sgx_dev = self.u.adt["/arm-io/sgx"]
-        self.handoff = self.sgx_dev.gfx_handoff_base
         self.shared_region = self.sgx_dev.gfx_shared_region_base
         self.gpu_region = self.sgx_dev.gpu_region_base
         self.ttbr0_base = self.u.memalign(self.PAGE_SIZE, self.PAGE_SIZE)
@@ -299,7 +307,7 @@ class UAT(Reloadable):
         data = []
         for addr, size in ranges:
             if addr is None:
-                raise Exception(f"Unmapped page at iova {iova:#x}")
+                raise Exception(f"Unmapped page at iova {ctx}:{iova:#x}")
             data.append(self.iface.readmem(addr, size))
             iova += size
 
@@ -315,7 +323,7 @@ class UAT(Reloadable):
         p = 0
         for addr, size in ranges:
             if addr is None:
-                raise Exception(f"Unmapped page at iova {iova:#x}")
+                raise Exception(f"Unmapped page at iova {ctx}:{iova:#x}")
             self.iface.writemem(addr, data[p:p + size])
             p += size
             iova += size
@@ -375,6 +383,7 @@ class UAT(Reloadable):
                         self.write_pte(table_addr, page >> offset, size, pte)
                     table_addr = pte.offset()
 
+        self.dirty_ranges.setdefault(ctx, []).append((start_page, end_page - start_page))
         #self.flush_dirty()
 
 
@@ -461,7 +470,7 @@ class UAT(Reloadable):
         assert addr in self.pt_cache
         table = self.pt_cache[addr]
         self.iface.writemem(addr, struct.pack(f"<{len(table)}Q", *table))
-        self.p.dc_civac(addr, 0x4000)
+        #self.p.dc_civac(addr, 0x4000)
 
     def flush_dirty(self):
         inval = False
@@ -472,8 +481,9 @@ class UAT(Reloadable):
 
         self.dirty.clear()
 
-        if inval:
-            self.u.inst("tlbi vmalle1os")
+        for ctx, ranges in self.dirty_ranges.items():
+            asid = ctx << 48
+            self.u.inst("tlbi aside1os, x0", asid)
 
     def invalidate_cache(self):
         self.pt_cache = {}

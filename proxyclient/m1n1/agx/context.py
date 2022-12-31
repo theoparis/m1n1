@@ -32,11 +32,11 @@ class GPUContext:
 
         # 32K VA pages since buffer manager needs that
         self.uobj = GPUAllocator(agx, "Userspace", 0x1600000000, 0x100000000, ctx=None,
-                                 guard_pages=1,
+                                 guard_pages=16,
                                  va_block=32768, nG=1, AP=0, PXN=1, UXN=1)
 
         self.gobj = GPUAllocator(agx, "GEM", 0x1500000000, 0x100000000, ctx=None,
-                                 guard_pages=1, nG=1, AP=0, PXN=1, UXN=1)
+                                 guard_pages=16, nG=1, AP=0, PXN=1, UXN=1)
 
         self.pipeline_base = 0x1100000000
         self.pipeline_size = 1 << 32
@@ -236,7 +236,7 @@ class GPUBufferManager:
         total = self.block_ctl.total.val
         while idx < total:
             block = self.ctx.uobj.new_buf(self.block_size, "BM Block", track=False)
-            self.block_list[idx] = block._addr // self.page_size
+            self.block_list[idx * 2] = block._addr // self.page_size
 
             page_idx = idx * self.pages_per_block
             for i in range(self.pages_per_block):

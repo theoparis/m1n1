@@ -3,6 +3,7 @@
 import textwrap
 from .asc import *
 from ..hw.uat import UAT, MemoryAttr, PTE, Page_PTE, TTBR
+from ..hw.agx import *
 
 from ..fw.agx.initdata import InitData
 from ..fw.agx.channels import *
@@ -241,6 +242,7 @@ class CommandQueueTracer(Reloadable):
         return self.info.pointers.rb_size
 
     def get_workitems(self, workmsg):
+        self.tracer.uat.invalidate_cache()
         self.update_info()
 
         if self.state.rptr is None:
@@ -292,11 +294,40 @@ class HandoffTracer(Tracer):
     def start(self):
         self.trace_regmap(self.base, 0x4000, GFXHandoffStruct, name="regs")
 
+class SGXTracer(ADTDevTracer):
+    DEFAULT_MODE = TraceMode.HOOK
+
+    REGMAPS = [SGXRegs, SGXInfoRegs]
+    NAMES = ["sgx", "sgx-id"]
+
+    def __init__(self, hv, devpath, verbose=False):
+        super().__init__(hv, devpath, verbose=verbose)
+        self.hooks = {}
+
+    def hook_r(self, addr, width, **kwargs):
+        self.log(f"HOOK: {addr:#x}:{width}")
+
+        if addr in self.hooks:
+            val = self.hooks[addr]
+            self.log(f"  Returning: {val:#x}")
+        else:
+            xval = val = super().hook_r(addr, width, **kwargs)
+            if isinstance(val, (list, tuple)):
+                xval = list(map(hex, val))
+            else:
+                xval = hex(val)
+            self.log(f"  Read: {xval}")
+
+        return val
+
 class AGXTracer(ASCTracer):
     ENDPOINTS = {
         0x20: PongEp,
         0x21: KickEp
     }
+
+    REGMAPS = [ASCRegs]
+    NAMES = ["asc"]
 
     PAGESIZE = 0x4000
 
@@ -306,6 +337,7 @@ class AGXTracer(ASCTracer):
         self.uat = UAT(hv.iface, hv.u, hv)
         self.mon = RegMonitor(hv.u, ascii=True, log=hv.log)
         self.dev_sgx = hv.u.adt["/arm-io/sgx"]
+        self.sgx = SGXRegs(hv.u, self.dev_sgx.get_reg(0)[0])
         self.gpu_region = getattr(self.dev_sgx, "gpu-region-base")
         self.gpu_region_size = getattr(self.dev_sgx, "gpu-region-size")
         self.gfx_shared_region = getattr(self.dev_sgx, "gfx-shared-region-base")
@@ -328,6 +360,7 @@ class AGXTracer(ASCTracer):
         self.trace_usermap = True
         self.pause_after_init = False
         self.shell_after_init = False
+        self.after_init_hook = None
         self.encoder_id_filter = None
         self.redump = False
 
@@ -424,7 +457,9 @@ class AGXTracer(ASCTracer):
 
     def uat_write(self, evt, level=3, base=0, iova=0, ctx=None):
         off = (evt.addr - base) // 8
-        self.log(f"UAT write L{level} at {ctx}:{iova:#x} (#{off:#x}) -> {evt.data}")
+        sh = ["NS", "??", "OS", "IS"]
+        a = f"{evt.flags.ATTR:02x}:{sh[evt.flags.SH]}"
+        self.log(f"UAT <{a}> write L{level} at {ctx}:{iova:#x} (#{off:#x}) -> {evt.data}")
 
         if level == 3:
             ctx = off // 2
@@ -443,7 +478,7 @@ class AGXTracer(ASCTracer):
                 return
             self.log(f"Dumping UAT for context {ctx}")
             self.uat.invalidate_cache()
-            _, pt = self.uat.get_pt(self.uat.gpu_region + ctx * 16, 8)
+            _, pt = self.uat.get_pt(self.uat.gpu_region + ctx * 16, 2)
             pt[off & 1] = evt.data
             self.uat.dump(ctx, log=self.log)
             self.add_uatmap_tracers(ctx)
@@ -527,10 +562,12 @@ class AGXTracer(ASCTracer):
             self.readlog[iova] = (self.vmcnt, evt)
         t = "W" if evt.flags.WRITE else "R"
         m = "+" if evt.flags.MULTI else " "
+        sh = ["NS", "??", "OS", "IS"]
+        a = f"{evt.flags.ATTR:02x}:{sh[evt.flags.SH]}"
         dinfo = ""
         if name is not None and base is not None:
             dinfo = f"[{name} + {iova - base:#x}]"
-        logline = (f"[cpu{evt.flags.CPU}] GPUVM[{ctx}/{self.vmcnt:5}]: {t}.{1<<evt.flags.WIDTH:<2}{m} " +
+        logline = (f"[cpu{evt.flags.CPU}] GPUVM[{ctx}/{self.vmcnt:5}]: <{a}>{t}.{1<<evt.flags.WIDTH:<2}{m} " +
                    f"{iova:#x}({evt.addr:#x}){dinfo} = {evt.data:#x}")
         self.log(logline, show_cpu=False)
         self.vmcnt += 1
@@ -671,11 +708,11 @@ class AGXTracer(ASCTracer):
             def read(off, size):
                 return self.uat.ioread(context, off & 0x7fff_ffff_ffff_ffff, size)
 
-            chexdump(kread(wi0.addr, 0x600), print_fn=self.log)
+            #chexdump(kread(wi0.addr, 0x600), print_fn=self.log)
             self.log(f"  context_id = {context:#x}")
             self.dump_buffer_manager(wi0.buffer_mgr, kread, read)
-            self.log(f"  unk_emptybuf @ {wi0.unk_emptybuf_addr:#x}:")
-            chexdump(kread(wi0.unk_emptybuf_addr, 0x1000), print_fn=self.log)
+            #self.log(f"  unk_emptybuf @ {wi0.unk_emptybuf_addr:#x}:")
+            #chexdump(kread(wi0.unk_emptybuf_addr, 0x1000), print_fn=self.log)
 
             #self.log(f"  unkptr_48 @ {wi0.unkptr_48:#x}:")
             #chexdump(read(wi0.unkptr_48, 0x1000), print_fn=self.log)
@@ -781,8 +818,8 @@ class AGXTracer(ASCTracer):
             self.log(f"    unkptr_18 @ {wi1.buf_thing.unkptr_18:#x}:")
             chexdump(read(wi1.buf_thing.unkptr_18, 0x1000), print_fn=self.log)
             self.dump_buffer_manager(wi1.buffer_mgr, kread, read)
-            self.log(f"  unk_emptybuf @ {wi1.unk_emptybuf_addr:#x}:")
-            chexdump(kread(wi1.unk_emptybuf_addr, 0x1000), print_fn=self.log)
+            #self.log(f"  unk_emptybuf @ {wi1.unk_emptybuf_addr:#x}:")
+            #chexdump(kread(wi1.unk_emptybuf_addr, 0x1000), print_fn=self.log)
             #self.log(f"  tvb_addr @ {wi1.tvb_addr:#x}:")
             #chexdump(read(wi1.tvb_addr, 0x1000), print_fn=self.log)
 
@@ -869,9 +906,9 @@ class AGXTracer(ASCTracer):
         self.mon.poll()
 
         if val == 0x10: # Kick Firmware
-            self.log("KickFirmware")
+            self.log("KickFirmware, polling")
             self.uat.invalidate_cache()
-            for chan in self.channels[13:]:
+            for chan in self.channels:
                 chan.poll()
             return
 
@@ -884,6 +921,7 @@ class AGXTracer(ASCTracer):
             assert type != 3
             priority = (val >> 2) & 3
             channel = type + priority * 3
+            self.uat.invalidate_cache()
 
         else:
             raise(Exception("Unknown kick type"))
@@ -1094,5 +1132,7 @@ class AGXTracer(ASCTracer):
             self.stop()
         if self.shell_after_init:
             self.hv.run_shell()
+        if self.after_init_hook:
+            self.after_init_hook()
 
 ChannelTracer = ChannelTracer._reloadcls()

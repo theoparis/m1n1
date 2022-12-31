@@ -134,8 +134,7 @@ class GPURenderer:
         self.buffer_mgr = GPUBufferManager(agx, ctx, buffers)
         self.buffer_mgr_initialized = False
         self.unk_emptybuf = agx.kobj.new_buf(0x40, "unk_emptybuf")
-        self.tvb_something_size = 0x10000
-        self.tvb_something = ctx.uobj.new_buf(self.tvb_something_size, "TVB Something", track=False).push()
+        self.tpc_size = 0
 
         ##### Job group
 
@@ -219,26 +218,38 @@ class GPURenderer:
         self.work = []
 
     def submit(self, cmdbuf, wait_for=None):
+        nclusters = 8
+
         work = GPUWork(self)
         self.work.append(work)
 
         self.buffer_mgr.increment()
 
-        aux_fb = self.ctx.uobj.new_buf(0x8000, "Aux FB thing", track=False)
+        aux_fb = self.ctx.uobj.new_buf(0x20000, "Aux FB thing", track=False)
         work.add(aux_fb)
 
-        #self.deflake_1 = ctx.uobj.new_buf(0x20, "Deflake 1")
-        #self.deflake_2 = ctx.uobj.new_buf(0x280, "Deflake 2")
-        #self.deflake_3 = ctx.uobj.new_buf(0x540, "Deflake 3")
-        deflake = self.ctx.uobj.new_buf(0x7e0, "Deflake", track=False)
-        work.add(deflake)
+        # t8103
+        deflake_1_size = 0x540
+        deflake_2_size = 0x280
+        deflake_3_size = 0x20
+
+        # t6002 - 9 times larger instead of 8? works with 8...
+        deflake_1_size *= nclusters
+        deflake_2_size *= nclusters
+        deflake_3_size *= nclusters
+
+        deflake_1 = self.ctx.uobj.new_buf(deflake_1_size, "Deflake 1", track=True)
+        deflake_2 = self.ctx.uobj.new_buf(deflake_2_size, "Deflake 2", track=True)
+        deflake_3 = self.ctx.uobj.new_buf(deflake_3_size, "Deflake 3", track=True)
+        work.add(deflake_1)
+        work.add(deflake_2)
+        work.add(deflake_3)
 
         unk_buf = self.ctx.uobj.new(Array(0x800, Int64ul), "Unknown Buffer", track=False)
         work.add(unk_buf)
 
         unk_buf.val = [0, *range(2, 0x401), *(0x400 * [0])]
         unk_buf.push()
-
 
         work.cmdbuf = cmdbuf
 
@@ -252,10 +263,6 @@ class GPURenderer:
 
         self.agx.log(f"ev_ta: {ev_ta.id}")
         self.agx.log(f"ev_3d: {ev_3d.id}")
-
-        deflake_1 = deflake._addr + 0x2a0
-        deflake_2 = deflake._addr + 0x20
-        deflake_3 = deflake._addr
 
         #self.event_control.base_stamp = self.stamp_value >> 8
         #self.event_control.push()
@@ -284,39 +291,105 @@ class GPURenderer:
         tiles_y = ((height + tile_height - 1) // tile_height)
         tiles = tiles_x * tiles_y
 
+        mtiles_x = 4
+        mtiles_y = 4
+
+        mtile_x1 = align(((tiles_x + mtiles_x - 1) // mtiles_x), 4)
+        mtile_x2 = 2 * mtile_x1
+        mtile_x3 = 3 * mtile_x1
+        mtile_y1 = align(((tiles_y + mtiles_y - 1) // mtiles_y), 4)
+        mtile_y2 = 2 * mtile_y1
+        mtile_y3 = 3 * mtile_y1
+
+        mtile_stride = mtile_x1 * mtile_y1
+
+        ## TODO: *samples
+        tiles_per_mtile_x = mtile_x1
+        tiles_per_mtile_y = mtile_y1
+
         tile_blocks_x = (tiles_x + 15) // 16
         tile_blocks_y = (tiles_y + 15) // 16
         tile_blocks = tile_blocks_x * tile_blocks_y
 
         tiling_params = TilingParameters()
-        tiling_params.size1 = 0x14 * tile_blocks
+        # rgn_header_size
+        rgn_entry_size = 5
+        tiling_params.size1 = (rgn_entry_size * tiles_per_mtile_x * tiles_per_mtile_y + 3) // 4
+        # PPP_MULTISAMPLECTL
         tiling_params.unk_4 = 0x88
-        tiling_params.unk_8 = 0x202
+        # PPP_CTRL
+        tiling_params.unk_8 = 0x203 # bit 0: GL clip mode
+        # PPP_SCREEN
         tiling_params.x_max = width - 1
         tiling_params.y_max = height - 1
+        # TE_SCREEN
         tiling_params.tile_count = ((tiles_y-1) << 12) | (tiles_x-1)
-        tiling_params.x_blocks = (12 * tile_blocks_x) | (tile_blocks_x << 12) | (tile_blocks_x << 20)
-        tiling_params.y_blocks = (12 * tile_blocks_y) | (tile_blocks_y << 12) | (tile_blocks_y << 20)
-        tiling_params.size2 = 0x10 * tile_blocks
-        tiling_params.size3 = 0x20 * tile_blocks
+        # TE_MTILE1
+        tiling_params.x_blocks = mtile_x3 | (mtile_x2 << 9) | (mtile_x1 << 18)
+        # TE_MTILE2
+        tiling_params.y_blocks = mtile_y3 | (mtile_y2 << 9) | (mtile_y1 << 18)
+        tiling_params.size2 = mtile_stride
+        tiling_params.size3 = 2 * mtile_stride
         tiling_params.unk_24 = 0x100
         tiling_params.unk_28 = 0x8000
 
-        #tvb_something_size = 0x800 * tile_blocks
-        #tvb_something = ctx.uobj.new_buf(tvb_something_size, "TVB Something", track=False).push()
+        tilemap_size = (4 * tiling_params.size1 * mtiles_x * mtiles_y)
 
-        tvb_tilemap_size = 0x800 * tile_blocks
-        tvb_tilemap = ctx.uobj.new_buf(tvb_tilemap_size, "TVB Tilemap", track=False).push()
+        tmtiles_x = tiles_per_mtile_x * mtiles_x
+        tmtiles_y = tiles_per_mtile_y * mtiles_y
+
+        tpc_entry_size = 8
+        tpc_size = tpc_entry_size * tmtiles_x * tmtiles_y * nclusters
+
+        if self.tpc_size < tpc_size:
+            self.tpc = ctx.uobj.new_buf(tpc_size, "TPC", track=True).push()
+            self.tpc_size = tpc_size
+
+        depth_aux_buffer_addr = 0
+        if cmdbuf.depth_buffer:
+            size = align_pot(max(width, tile_width)) * align_pot(max(height, tile_width)) // 32
+            depth_aux_buffer = self.ctx.uobj.new_buf(size, "Depth Aux", track=True)
+            work.add(depth_aux_buffer)
+            depth_aux_buffer_addr = depth_aux_buffer._addr
+
+        stencil_aux_buffer_addr = 0
+        if cmdbuf.stencil_buffer:
+            size = align_pot(max(width, tile_width)) * align_pot(max(height, tile_width)) // 32
+            stencil_aux_buffer = self.ctx.uobj.new_buf(size, "Stencil Aux", track=False)
+            work.add(stencil_aux_buffer)
+            stencil_aux_buffer_addr = stencil_aux_buffer._addr
+
+        #tvb_tilemap_size = 0x80 * mtile_stride
+        tvb_tilemap_size = tilemap_size
+        tvb_tilemap = ctx.uobj.new_buf(tvb_tilemap_size, "TVB Tilemap", track=True).push()
+        work.tvb_tilemap_size = tvb_tilemap_size
+        work.tvb_tilemap = tvb_tilemap
         work.add(tvb_tilemap)
 
-        tvb_heapmeta_size = 0x200
+        # rogue: 0x180 * 4?
+        #tvb_heapmeta_size = 0x200
+        tvb_heapmeta_size = 0x600
         tvb_heapmeta = ctx.uobj.new_buf(tvb_heapmeta_size, "TVB Heap Meta", track=False).push()
         work.add(tvb_heapmeta)
+
+        unk_tile_buf1 = self.ctx.uobj.new_buf(tvb_tilemap_size * nclusters, "Unk tile buf 1", track=True)
+        print("tvb_tilemap_size", hex(tvb_tilemap_size))
+        unk_tile_buf2 = self.ctx.uobj.new_buf(0x4 * nclusters, "Unk tile buf 2", track=True)
+        #size = 0xc0 * nclusters
+        size = 0xc80
+        unk_tile_buf3 = self.ctx.uobj.new_buf(size, "Unk tile buf 3", track=True)
+        unk_tile_buf4 = self.ctx.uobj.new_buf(0x280 * nclusters, "Unk tile buf 4", track=True)
+        unk_tile_buf5 = self.ctx.uobj.new_buf(0x30 * nclusters, "Unk tile buf 5", track=True)
+        work.add(unk_tile_buf1)
+        work.add(unk_tile_buf2)
+        work.add(unk_tile_buf3)
+        work.add(unk_tile_buf4)
+        work.add(unk_tile_buf5)
 
         ##### Buffer stuff?
 
         # buffer related?
-        bufferthing_buf = ctx.uobj.new_buf(0x80, "BufferThing.unkptr_18", track=False)
+        bufferthing_buf = ctx.uobj.new_buf(0x80, "BufferThing.unkptr_18", track=True)
         work.add(bufferthing_buf)
 
         work.buf_desc = buf_desc = agx.kobj.new(BufferThing, track=False)
@@ -368,12 +441,14 @@ class GPURenderer:
         wc_3d.tvb_tilemap = tvb_tilemap._addr
         wc_3d.unk_40 = 0x88
         wc_3d.unk_48 = 0x1
-        wc_3d.tile_blocks_y = tile_blocks_y * 4
-        wc_3d.tile_blocks_x = tile_blocks_x * 4
+        wc_3d.tile_blocks_y = mtile_y1
+        wc_3d.tile_blocks_x = mtile_x1
         wc_3d.unk_50 = 0x0
         wc_3d.unk_58 = 0x0
-        wc_3d.uuid1 = 0x3b315cae # ??
-        wc_3d.uuid2 = 0x3b6c7b92 # ??
+
+        TAN_60 = 1.732051
+        wc_3d.merge_upper_x = TAN_60 / width
+        wc_3d.merge_upper_y = TAN_60 / height
         wc_3d.unk_68 = 0x0
         wc_3d.tile_count = tiles
 
@@ -399,9 +474,23 @@ class GPURenderer:
 
         # cmdbuf.ds_flags
         # 0 - no depth
-        # 0x80000 - f32 depth
-        # 0x80044 - compressed depth? weird
-        # 0xc0000 - depth and stencil
+        # 0x80000 - depth store enable
+        # 0x08000 - depth load enable
+
+        # 0x00044 - compressed depth
+
+        # 0x40000 - stencil store enable
+        # 0x04000 - stencil load enable
+        # 0x00110 - compressed stencil
+
+        # Z store format
+        # 0x4000000 - Depth16Unorm
+
+        # For Depth16Unorm: 0x40000 here also
+        # AFBI.[  0.  4] unk1 = 0x4c000
+
+        # ASAHI_CMDBUF_SET_WHEN_RELOADING_Z_OR_S
+        # Actually set when loading *and* storing Z, OR loading *and* storing S
 
         # Structures embedded in WorkCommand3D
         if True:
@@ -410,11 +499,15 @@ class GPURenderer:
             wc_3d.struct_1.store_pipeline_addr = cmdbuf.store_pipeline | 4
             wc_3d.struct_1.unk_8 = 0x0
             wc_3d.struct_1.unk_c = 0x0
-            wc_3d.struct_1.uuid1 = wc_3d.uuid1
-            wc_3d.struct_1.uuid2 = wc_3d.uuid2
+
+            TAN_60 = 1.732051
+            wc_3d.struct_1.merge_upper_x = TAN_60 / width
+            wc_3d.struct_1.merge_upper_y = TAN_60 / height
+
             wc_3d.struct_1.unk_18 = 0x0
-            wc_3d.struct_1.tile_blocks_y = tile_blocks_y * 4
-            wc_3d.struct_1.tile_blocks_x = tile_blocks_x * 4
+            # ISP_MTILE_SIZE
+            wc_3d.struct_1.tile_blocks_y = mtile_y1
+            wc_3d.struct_1.tile_blocks_x = mtile_x1
             wc_3d.struct_1.unk_24 = 0x0
             wc_3d.struct_1.tile_counts = ((tiles_y-1) << 12) | (tiles_x-1)
             wc_3d.struct_1.unk_2c = 0x8
@@ -424,10 +517,11 @@ class GPURenderer:
             wc_3d.struct_1.unk_36 = 0x0
             wc_3d.struct_1.unk_38 = 0x0
             wc_3d.struct_1.unk_3c = 0x1
-            wc_3d.struct_1.unk_40_padding = bytes(0xb0)
+            wc_3d.struct_1.unk_40 = 0
+            wc_3d.struct_1.unk_44_padding = bytes(0xac)
             wc_3d.struct_1.depth_bias_array = Start3DArrayAddr(cmdbuf.depth_bias_array)
             wc_3d.struct_1.scissor_array = Start3DArrayAddr(cmdbuf.scissor_array)
-            wc_3d.struct_1.unk_110 = 0x0
+            wc_3d.struct_1.visibility_result_buffer = 0x0
             wc_3d.struct_1.unk_118 = 0x0
             wc_3d.struct_1.unk_120 = [0] * 37
             wc_3d.struct_1.unk_reload_pipeline = Start3DClearPipelineBinding(
@@ -438,21 +532,22 @@ class GPURenderer:
             wc_3d.struct_1.unk_270 = 0
             wc_3d.struct_1.reload_pipeline = Start3DClearPipelineBinding(
                 cmdbuf.partial_reload_pipeline_bind, cmdbuf.partial_reload_pipeline | 4)
-            wc_3d.struct_1.depth_flags = cmdbuf.ds_flags
+            wc_3d.struct_1.depth_flags = cmdbuf.ds_flags | 0x44
             wc_3d.struct_1.unk_290 = 0x0
             wc_3d.struct_1.depth_buffer_ptr1 = cmdbuf.depth_buffer
             wc_3d.struct_1.unk_2a0 = 0x0
             wc_3d.struct_1.unk_2a8 = 0x0
             wc_3d.struct_1.depth_buffer_ptr2 = cmdbuf.depth_buffer
             wc_3d.struct_1.depth_buffer_ptr3 = cmdbuf.depth_buffer
-            wc_3d.struct_1.unk_2c0 = 0x0
+            wc_3d.struct_1.depth_aux_buffer_ptr = depth_aux_buffer_addr
             wc_3d.struct_1.stencil_buffer_ptr1 = cmdbuf.stencil_buffer
             wc_3d.struct_1.unk_2d0 = 0x0
             wc_3d.struct_1.unk_2d8 = 0x0
             wc_3d.struct_1.stencil_buffer_ptr2 = cmdbuf.stencil_buffer
             wc_3d.struct_1.stencil_buffer_ptr3 = cmdbuf.stencil_buffer
-            wc_3d.struct_1.unk_2f0 = [0x0, 0x0, 0x0]
-            wc_3d.struct_1.aux_fb_unk0 = 0x8 # sometimes 4
+            wc_3d.struct_1.stencil_aux_buffer_ptr = stencil_aux_buffer_addr
+            wc_3d.struct_1.unk_2f8 = [0x0, 0x0]
+            wc_3d.struct_1.aux_fb_unk0 = 4 #0x8 # sometimes 4
             wc_3d.struct_1.unk_30c = 0x0
             wc_3d.struct_1.aux_fb = AuxFBInfo(0xc000, 0, width, height)
             wc_3d.struct_1.unk_320_padding = bytes(0x10)
@@ -464,7 +559,7 @@ class GPURenderer:
             wc_3d.struct_1.stencil_clear_val2 = cmdbuf.stencil_clear_value
             wc_3d.struct_1.unk_375 = 3
             wc_3d.struct_1.unk_376 = 0x0
-            wc_3d.struct_1.unk_378 = 0x10 #0x8
+            wc_3d.struct_1.unk_378 = 0x10
             wc_3d.struct_1.unk_37c = 0x0
             wc_3d.struct_1.unk_380 = 0x0
             wc_3d.struct_1.unk_388 = 0x0
@@ -473,26 +568,40 @@ class GPURenderer:
 
         if True:
             wc_3d.struct_2 = Start3DStruct2()
-            wc_3d.struct_2.unk_0 = 0xa000 # - maybe tvb_something_size?
+            wc_3d.struct_2.unk_0 = 0xa000
             wc_3d.struct_2.clear_pipeline = Start3DClearPipelineBinding(
                 cmdbuf.load_pipeline_bind, cmdbuf.load_pipeline | 4)
             wc_3d.struct_2.unk_18 = 0x88
             wc_3d.struct_2.scissor_array = cmdbuf.scissor_array
             wc_3d.struct_2.depth_bias_array = cmdbuf.depth_bias_array
             wc_3d.struct_2.aux_fb =  wc_3d.struct_1.aux_fb
+            # ISP_ZLS_PIXELS
             wc_3d.struct_2.depth_dimensions = wc_3d.struct_1.depth_dimensions
-            wc_3d.struct_2.unk_48 = 0x0
+            wc_3d.struct_2.visibility_result_buffer = 0x0
+            # ISP_ZLSCTL
             wc_3d.struct_2.depth_flags = cmdbuf.ds_flags
+            wc_3d.struct_2.unk_58_g14_0 = 0x4040404
+            wc_3d.struct_2.unk_58_g14_8 = 0
             wc_3d.struct_2.depth_buffer_ptr1 = cmdbuf.depth_buffer
             wc_3d.struct_2.depth_buffer_ptr2 = cmdbuf.depth_buffer
+            wc_3d.struct_2.unk_68_g14_0 = 0
             wc_3d.struct_2.stencil_buffer_ptr1 = cmdbuf.stencil_buffer
             wc_3d.struct_2.stencil_buffer_ptr2 = cmdbuf.stencil_buffer
-            wc_3d.struct_2.unk_68 = [0] * 12
+            wc_3d.struct_2.unk_78 = [0] * 4
+            wc_3d.struct_2.depth_aux_buffer_ptr1 = depth_aux_buffer_addr
+            wc_3d.struct_2.unk_a0 = 0
+            wc_3d.struct_2.depth_aux_buffer_ptr2 = depth_aux_buffer_addr
+            wc_3d.struct_2.unk_b0 = 0
+            wc_3d.struct_2.stencil_aux_buffer_ptr1 = stencil_aux_buffer_addr
+            wc_3d.struct_2.unk_c0 = 0
+            wc_3d.struct_2.stencil_aux_buffer_ptr2 = stencil_aux_buffer_addr
+            wc_3d.struct_2.unk_d0 = 0
             wc_3d.struct_2.tvb_tilemap = tvb_tilemap._addr
             wc_3d.struct_2.tvb_heapmeta_addr = tvb_heapmeta._addr
-            wc_3d.struct_2.unk_e8 = 0x50000000 * tile_blocks
+            wc_3d.struct_2.unk_e8 = tiling_params.size1 << 24
             wc_3d.struct_2.tvb_heapmeta_addr2 = tvb_heapmeta._addr
             # 0x10000 - clear empty tiles
+            # ISP_CTL (but bits seem to have moved)
             wc_3d.struct_2.unk_f8 = 0x10280 #0x10280 # TODO: varies 0, 0x280, 0x10000, 0x10280
             wc_3d.struct_2.aux_fb_ptr = aux_fb._addr
             wc_3d.struct_2.unk_108 = [0x0, 0x0, 0x0, 0x0, 0x0, 0x0]
@@ -501,7 +610,9 @@ class GPURenderer:
             wc_3d.struct_2.unk_148 = 0x0
             wc_3d.struct_2.unk_150 = 0x0
             wc_3d.struct_2.unk_158 = 0x1c
-            wc_3d.struct_2.unk_160_padding = bytes(0x1e0)
+            wc_3d.struct_2.unk_160 = 0
+            wc_3d.struct_2.unk_168_padding = bytes(0x1d8)
+            wc_3d.struct_2.unk_198_padding = bytes(0x1a8)
 
         if True:
             wc_3d.struct_6 = Start3DStruct6()
@@ -513,8 +624,8 @@ class GPURenderer:
             wc_3d.struct_6.unk_1c = 0xffffffff
             wc_3d.struct_6.unknown_buffer = unk_buf._addr
             wc_3d.struct_6.unk_28 = 0x0
-            wc_3d.struct_6.unk_30 = 0x1
-            wc_3d.struct_6.unk_34 = 0x1
+            wc_3d.struct_6.unk_30 = 0x0
+            wc_3d.struct_6.unk_34 = 0x0
 
         if True:
             wc_3d.struct_7 = Start3DStruct7()
@@ -523,8 +634,8 @@ class GPURenderer:
             wc_3d.struct_7.stamp2 = self.stamp_3d2
             wc_3d.struct_7.stamp_value = self.stamp_value_3d
             wc_3d.struct_7.ev_3d = ev_3d.id
-            wc_3d.struct_7.unk_20 = 0x0
-            wc_3d.struct_7.unk_24 = 1 # 0x0 # check
+            wc_3d.struct_7.evctl_index = 0x0
+            wc_3d.struct_7.unk_24 = 1
             wc_3d.struct_7.uuid = uuid_3d
             wc_3d.struct_7.prev_stamp_value = self.prev_stamp_value_3d >> 8
             wc_3d.struct_7.unk_30 = 0x0
@@ -539,13 +650,13 @@ class GPURenderer:
         ms = GPUMicroSequence(agx)
 
         start_3d = Start3DCmd()
-        start_3d.struct1 = wc_3d.struct_1
-        start_3d.struct2 = wc_3d.struct_2
+        start_3d.struct1 = wc_3d.struct_1 # 0x44 bytes!
+        start_3d.struct2 = wc_3d.struct_2 # 0x168 bytes!
         start_3d.buf_thing = buf_desc
         start_3d.stats_ptr = agx.initdata.regionB.stats_3d.stats._addr
         start_3d.busy_flag_ptr = wc_3d.busy_flag._addr
-        start_3d.struct6 = wc_3d.struct_6
-        start_3d.struct7 = wc_3d.struct_7
+        start_3d.struct6 = wc_3d.struct_6 # 4 bytes!
+        start_3d.struct7 = wc_3d.struct_7 # 4 bytes!
         start_3d.cmdqueue_ptr = self.wq_3d.info._addr
         start_3d.workitem_ptr = wc_3d._addr
         start_3d.context_id = self.ctx_id
@@ -591,7 +702,7 @@ class GPURenderer:
         ts1.ts2_addr = wc_3d.ts2._addr
         ts1.cmdqueue_ptr = self.wq_3d.info._addr
         ts1.unk_24 = 0x0
-        if Ver.check("13.0 beta4"):
+        if Ver.check("V >= V13_0B4"):
             ts1.unkptr_2c_0 = wc_3d.ts_flag._addr
         ts1.uuid = uuid_3d
         ts1.unk_30_padding = 0x0
@@ -608,7 +719,7 @@ class GPURenderer:
         ts2.ts2_addr = wc_3d.ts3._addr
         ts2.cmdqueue_ptr = self.wq_3d.info._addr
         ts2.unk_24 = 0x0
-        if Ver.check("13.0 beta4"):
+        if Ver.check("V >= V13_0B4"):
             ts2.unkptr_2c_0 = wc_3d.ts_flag._addr
         ts2.uuid = uuid_3d
         ts2.unk_30_padding = 0x0
@@ -635,6 +746,7 @@ class GPURenderer:
         finish_3d.unk_7c = 0
         finish_3d.unk_84 = 0
         finish_3d.unk_8c = 0
+        finish_3d.unk_8c_g14 = 0
         finish_3d.restart_branch_offset = start_3d_offset - ms.off
         finish_3d.unk_98 = 0
         finish_3d.unk_9c = bytes(0x10)
@@ -646,6 +758,7 @@ class GPURenderer:
         wc_3d.microsequence_ptr = ms.obj._addr
         wc_3d.microsequence_size = ms.size
 
+        print(wc_3d)
         self.wq_3d.submit(wc_3d)
 
         ##### TA init
@@ -723,29 +836,31 @@ class GPURenderer:
             wc_ta.struct_2.unk_8 = 0x1e3ce508 # fixed
             wc_ta.struct_2.unk_c = 0x1e3ce508 # fixed
             wc_ta.struct_2.tvb_tilemap = tvb_tilemap._addr
-            wc_ta.struct_2.unkptr_18 = 0x0
-            wc_ta.struct_2.unkptr_20 = self.tvb_something._addr
-            wc_ta.struct_2.tvb_heapmeta_addr = tvb_heapmeta._addr | 0x8000000000000000
+            wc_ta.struct_2.tvb_cluster_tilemaps = unk_tile_buf1._addr
+            wc_ta.struct_2.tpc = self.tpc._addr
+            wc_ta.struct_2.tvb_heapmeta_addr = tvb_heapmeta._addr | 0x8000_0000_0000_0000
             wc_ta.struct_2.iogpu_unk_54 = 0x6b0003 # fixed
             wc_ta.struct_2.iogpu_unk_55 = 0x3a0012 # fixed
             wc_ta.struct_2.iogpu_unk_56 = 0x1 # fixed
-            wc_ta.struct_2.unk_40 = 0x0 # fixed
-            wc_ta.struct_2.unk_48 = 0xa000 # fixed - maybe tvb_something_size?
+            wc_ta.struct_2.tvb_cluster_meta1 = unk_tile_buf2._addr | 0x4_0000_0000_0000
+            wc_ta.struct_2.unk_48 = 0xa000
             wc_ta.struct_2.unk_50 = 0x88 # fixed
             wc_ta.struct_2.tvb_heapmeta_addr2 = tvb_heapmeta._addr
             wc_ta.struct_2.unk_60 = 0x0 # fixed
-            wc_ta.struct_2.unk_68 = 0x0 # fixed
-            wc_ta.struct_2.iogpu_deflake_1 = deflake_1
-            wc_ta.struct_2.iogpu_deflake_2 = deflake_2
+            wc_ta.struct_2.core_mask = 0xffffffffffffffff
+            #wc_ta.struct_2.unk_68 = 0xff << (8 * (self.buffer_mgr_slot % 8))
+            wc_ta.struct_2.iogpu_deflake_1 = deflake_1._addr
+            wc_ta.struct_2.iogpu_deflake_2 = deflake_2._addr
             wc_ta.struct_2.unk_80 = 0x1 # fixed
-            wc_ta.struct_2.iogpu_deflake_3 = deflake_3 | 0x4000000000000 # check
+            wc_ta.struct_2.iogpu_deflake_3 = deflake_3._addr | 0x4_0000_0000_0000 # check
             wc_ta.struct_2.encoder_addr = cmdbuf.encoder_ptr
-            wc_ta.struct_2.unk_98 = [0x0, 0x0] # fixed
-            wc_ta.struct_2.unk_a8 = 0xa041 # fixed
+            wc_ta.struct_2.tvb_cluster_meta2 = unk_tile_buf3._addr
+            wc_ta.struct_2.tvb_cluster_meta3 = unk_tile_buf4._addr
+            wc_ta.struct_2.tiling_control = 0xa040 #0xa041 # fixed
             wc_ta.struct_2.unk_b0 = [0x0, 0x0, 0x0, 0x0, 0x0, 0x0] # fixed
             wc_ta.struct_2.pipeline_base = self.ctx.pipeline_base
-            wc_ta.struct_2.unk_e8 = 0x0 # fixed
-            wc_ta.struct_2.unk_f0 = 0x1c # fixed
+            wc_ta.struct_2.tvb_cluster_meta4 = unk_tile_buf5._addr | 0x3000_0000_0000_0000
+            wc_ta.struct_2.unk_f0 = 0x20 # fixed
             wc_ta.struct_2.unk_f8 = 0x8c60 # fixed
             wc_ta.struct_2.unk_100 = [0x0, 0x0, 0x0] # fixed
             wc_ta.struct_2.unk_118 = 0x1c # fixed
@@ -755,7 +870,7 @@ class GPURenderer:
             wc_ta.struct_3.unk_480 = [0x0, 0x0, 0x0, 0x0, 0x0, 0x0] # fixed
             wc_ta.struct_3.unk_498 = 0x0 # fixed
             wc_ta.struct_3.unk_4a0 = 0x0 # fixed
-            wc_ta.struct_3.iogpu_deflake_1 = deflake_1
+            wc_ta.struct_3.iogpu_deflake_1 = deflake_1._addr
             wc_ta.struct_3.unk_4ac = 0x0 # fixed
             wc_ta.struct_3.unk_4b0 = 0x0 # fixed
             wc_ta.struct_3.unk_4b8 = 0x0 # fixed
@@ -781,7 +896,7 @@ class GPURenderer:
             wc_ta.struct_3.stamp2 = self.stamp_ta2
             wc_ta.struct_3.stamp_value = self.stamp_value_ta
             wc_ta.struct_3.ev_ta = ev_ta.id
-            wc_ta.struct_3.unk_580 = 0x0 # fixed
+            wc_ta.struct_3.evctl_index = 0
             wc_ta.struct_3.unk_584 = 0x0 # 1 for boot stuff?
             wc_ta.struct_3.uuid2 = uuid_ta
             wc_ta.struct_3.prev_stamp_value = self.prev_stamp_value_ta >> 8
@@ -794,7 +909,7 @@ class GPURenderer:
 
         start_ta = StartTACmd()
         start_ta.tiling_params = wc_ta.tiling_params
-        start_ta.struct2 = wc_ta.struct_2
+        start_ta.struct2 = wc_ta.struct_2 # len 0x120
         start_ta.buffer_mgr = self.buffer_mgr.info
         start_ta.buf_thing = buf_desc
         start_ta.stats_ptr = agx.initdata.regionB.stats_ta.stats._addr
@@ -837,7 +952,7 @@ class GPURenderer:
         ts1.ts2_addr = wc_ta.ts2._addr
         ts1.cmdqueue_ptr = self.wq_ta.info._addr
         ts1.unk_24 = 0x0
-        if Ver.check("13.0 beta4"):
+        if Ver.check("V >= V13_0B4"):
             ts1.unkptr_2c_0 = wc_ta.ts_flag._addr
         ts1.uuid = uuid_ta
         ts1.unk_30_padding = 0x0
@@ -854,7 +969,7 @@ class GPURenderer:
         ts2.ts2_addr = wc_ta.ts3._addr
         ts2.cmdqueue_ptr = self.wq_ta.info._addr
         ts2.unk_24 = 0x0
-        if Ver.check("13.0 beta4"):
+        if Ver.check("V >= V13_0B4"):
             ts2.unkptr_2c_0 = wc_ta.ts_flag._addr
         ts2.uuid = uuid_ta
         ts2.unk_30_padding = 0x0
@@ -879,6 +994,7 @@ class GPURenderer:
         finish_ta.unk_60 = 0x0 # fixed
         finish_ta.unk_64 = 0x0 # fixed
         finish_ta.unk_68 = 0x0 # fixed
+        finish_ta.unk_6c_g14 = 0 # fixed
         finish_ta.restart_branch_offset = start_ta_offset - ms.off
         finish_ta.unk_70 = 0x0 # fixed
         finish_ta.unk_74 = bytes(0x10) # Ventura
@@ -888,14 +1004,14 @@ class GPURenderer:
 
         work.add(ms.obj)
 
-        wc_ta.unkptr_45c = self.tvb_something._addr
-        wc_ta.tvb_size = tvb_tilemap_size
+        wc_ta.unkptr_45c = self.tpc._addr
+        wc_ta.tvb_size = tpc_size
         wc_ta.microsequence_ptr = ms.obj._addr
         wc_ta.microsequence_size = ms.size
         wc_ta.ev_3d = ev_3d.id
         wc_ta.stamp_value = self.stamp_value_ta
 
-        #print(wc_ta)
+        print(wc_ta)
         self.wq_ta.submit(wc_ta)
 
         self.agx.log("Submit done")
@@ -932,16 +1048,16 @@ class GPURenderer:
 
         #if work.fb is not None and work.width and work.height:
         if work.fb is not None and work.width and work.height and work.width == 1920:
-
+            agx = self.agx
             self.agx.log(f"Render {work.width}x{work.height} @ {work.fb:#x}")
             base, obj = self.agx.find_object(work.fb, self.ctx_id)
 
-            #unswizzle(agx, obj._paddr, width, height, 4, "fb.bin", grid=False)
+            #unswizzle(agx, obj._paddr, work.width, work.height, 4, "fb.bin", grid=False)
             #open("fb.bin", "wb").write(self.agx.u.iface.readmem(obj._paddr, work.width*work.height*4))
             #os.system(f"convert -size {work.width}x{work.height} -depth 8 rgba:fb.bin -alpha off frame{self.frames}.png")
             self.agx.p.fb_blit(0, 0, work.width, work.height, obj._paddr, work.width, PIX_FMT.XBGR)
 
-        if False: #if work.depth is not None:#False and depth is not None:
+        if False: #work.depth is not None:
             base, obj = self.agx.find_object(work.depth, self.ctx_id)
 
             width = align_up(work.width, 64)

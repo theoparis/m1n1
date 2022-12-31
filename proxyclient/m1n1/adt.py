@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-import itertools, fnmatch
+import itertools, fnmatch, sys
 from construct import *
 
 from .utils import AddrLookup, FourCC, SafeGreedyRange
@@ -154,6 +154,15 @@ DCBlockerConfig = Struct(
     "pad" / Hex(Int16ul),
 )
 
+Coef = ExprAdapter(Int32ul,
+                   lambda x, ctx: (x - ((x & 0x1000000) << 1)) / 65536,
+                   lambda x, ctx: int(round(x * 65536)) & 0x1ffffff)
+
+MTRPolynomFuseAGX = GreedyRange(Struct(
+    "id" / Int32ul,
+    "data" / Prefixed(Int32ul, GreedyRange(Coef)),
+))
+
 DEV_PROPERTIES = {
     "pmgr": {
         "*": {
@@ -167,6 +176,7 @@ DEV_PROPERTIES = {
             "device-bridges": PMGRDeviceBridges,
             "voltage-states*": SafeGreedyRange(Int32ul),
             "events": PMGREvents,
+            "mtr-polynom-fuse-agx": MTRPolynomFuseAGX,
         }
     },
     "clpc": {
@@ -200,7 +210,7 @@ DEV_PROPERTIES = {
     },
     "sgx": {
         "*": {
-            "perf-states": SafeGreedyRange(GPUPerfState),
+            "perf-states*": SafeGreedyRange(GPUPerfState),
             "*-kp": Float32l,
             "*-ki": Float32l,
             "*-ki-*": Float32l,
@@ -226,6 +236,17 @@ DEV_PROPERTIES = {
             "amp-dcblocker-config": DCBlockerConfig,
         },
     },
+    "*aop-audio*": {
+        "*": {
+            "clockSource": FourCC,
+            "identifier": FourCC,
+        },
+    },
+    "*alc?/audio-leap-mic*": {
+        "*": {
+            "audio-stream-formatter": FourCC,
+        }
+    }
 }
 
 def parse_prop(node, path, node_name, name, v, is_template=False):
@@ -236,9 +257,15 @@ def parse_prop(node, path, node_name, name, v, is_template=False):
 
     dev_props = None
     for k, pt in DEV_PROPERTIES.items():
-        if fnmatch.fnmatch(node_name, k) or fnmatch.fnmatch(path, k):
+        if fnmatch.fnmatch(path, k):
             dev_props = pt
             break
+
+    if not dev_props:
+        for k, pt in DEV_PROPERTIES.items():
+            if fnmatch.fnmatch(node_name, k):
+                dev_props = pt
+                break
 
     possible_match = False
     if dev_props:
@@ -342,7 +369,12 @@ def build_prop(path, name, v, t=None):
     elif isinstance(v, str):
         t = CString("ascii")
     elif isinstance(v, int):
-        t = Int32ul
+        if v > 0xffffffff:
+            t = Int64ul
+        else:
+            t = Int32ul
+    elif isinstance(v, float):
+        t = Float32l
     elif isinstance(v, tuple) and all(isinstance(i, int) for i in v):
         t = Array(len(v), Int32ul)
 
@@ -458,6 +490,9 @@ class ADTNode:
             return
         del self._properties[attr]
 
+    def getprop(self, name, default=None):
+        return self._properties.get(name, default)
+
     @property
     def address_cells(self):
         try:
@@ -480,7 +515,7 @@ class ADTNode:
             raise AttributeError("#interrupt-cells")
 
     def _fmt_prop(self, k, v):
-        t, is_template = self._types[k]
+        t, is_template = self._types.get(k, (None, False))
         if is_template:
             return f"<< {v} >>"
         elif isinstance(v, ListContainer):

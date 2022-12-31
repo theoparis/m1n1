@@ -6,10 +6,15 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import atexit, sys
 
+from m1n1.setup import *
+from m1n1.constructutils import Ver
+from m1n1.utils import *
+
+Ver.set_version(u)
+
 from m1n1.agx import AGX
 from m1n1.agx.render import *
 
-from m1n1.setup import *
 from m1n1 import asm
 
 from m1n1.gpiola import GPIOLogicAnalyzer
@@ -85,7 +90,7 @@ fault_cmdbuf = f.cmdbuf.clone()
 
 for i in range(RENDERERS):
     c = ctx0 if i == 0 else ctx
-    r = GPURenderer(c, 8, bm_slot=0x10 + i, queue=1)
+    r = GPURenderer(c, 32, bm_slot=0x10 + i, queue=1)
     renderers.append(r)
 
     for q in (r.wq_3d, r.wq_ta):
@@ -144,20 +149,20 @@ for i in range(4):
     regs[f"ta{i}_cq"] = t(agx.initdata.regionB.stats_ta.stats.queues[i].addrof("cur_cmdqueue"))
 
 regs.update({
-    #"pwr_status": t(agx.initdata.regionB.hwdata_a.addrof("pwr_status")),
-    #"pstate": t(agx.initdata.regionB.hwdata_a.addrof("cur_pstate")),
-    #"temp_c": t(agx.initdata.regionB.hwdata_a.addrof("temp_c")),
-    #"pwr_mw": t(agx.initdata.regionB.hwdata_a.addrof("avg_power_mw")),
-    #"pwr_ts": t(agx.initdata.regionB.hwdata_a.addrof("update_ts")),
+    "pwr_status": t(agx.initdata.regionB.hwdata_a.addrof("pwr_status")),
+    "pstate": t(agx.initdata.regionB.hwdata_a.addrof("cur_pstate")),
+    "temp_c": t(agx.initdata.regionB.hwdata_a.addrof("temp_c")),
+    "pwr_mw": t(agx.initdata.regionB.hwdata_a.addrof("avg_power_mw")),
+    "pwr_ts": t(agx.initdata.regionB.hwdata_a.addrof("update_ts")),
 
     #"unk_10": t(agx.initdata.regionB.hwdata_a.addrof("unk_10")),
     #"unk_14": t(agx.initdata.regionB.hwdata_a.addrof("unk_14")),
-    #"actual_pstate": t(agx.initdata.regionB.hwdata_a.addrof("actual_pstate")),
-    #"tgt_pstate": t(agx.initdata.regionB.hwdata_a.addrof("tgt_pstate")),
+    "actual_pstate": t(agx.initdata.regionB.hwdata_a.addrof("actual_pstate")),
+    "tgt_pstate": t(agx.initdata.regionB.hwdata_a.addrof("tgt_pstate")),
     #"unk_40": t(agx.initdata.regionB.hwdata_a.addrof("unk_40")),
     #"unk_44": t(agx.initdata.regionB.hwdata_a.addrof("unk_44")),
     #"unk_48": t(agx.initdata.regionB.hwdata_a.addrof("unk_48")),
-    #"freq_mhz": t(agx.initdata.regionB.hwdata_a.addrof("freq_mhz")),
+    "freq_mhz": t(agx.initdata.regionB.hwdata_a.addrof("freq_mhz")),
 
     #"unk_748.0": t(agx.initdata.regionB.hwdata_a.addrof("unk_748")),
     #"unk_748.1": t(agx.initdata.regionB.hwdata_a.addrof("unk_748")+4),
@@ -165,7 +170,7 @@ regs.update({
     #"unk_748.3": t(agx.initdata.regionB.hwdata_a.addrof("unk_748")+12),
     #"use_percent": t(agx.initdata.regionB.hwdata_a.addrof("use_percent")),
     #"unk_83c": t(agx.initdata.regionB.hwdata_a.addrof("unk_83c")),
-    #"freq_with_off": t(agx.initdata.regionB.hwdata_a.addrof("freq_with_off")),
+    "freq_with_off": t(agx.initdata.regionB.hwdata_a.addrof("freq_with_off")),
     #"unk_ba0": t(agx.initdata.regionB.hwdata_a.addrof("unk_ba0")),
     #"unk_bb0": t(agx.initdata.regionB.hwdata_a.addrof("unk_bb0")),
     #"unk_c44": t(agx.initdata.regionB.hwdata_a.addrof("unk_c44")),

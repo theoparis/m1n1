@@ -13,6 +13,12 @@ align = align_up
 def align_down(v, a=16384):
     return v & ~(a - 1)
 
+def align_pot(v):
+    out = 1
+    while out < v:
+        out *= 2
+    return out
+
 def hexdump(s, sep=" "):
     return sep.join(["%02x"%x for x in s])
 
@@ -99,7 +105,7 @@ def chexdiff32(prev, cur, ascii=True, offset=0, offset2=None):
             out.append("\n")
     return "".join(out)
 
-def chexundump(dump):
+def chexundump(dump, base=0):
     if type(dump) is bytes:
         dump = dump.decode("ascii")
     elif type(dump) is str:
@@ -109,6 +115,8 @@ def chexundump(dump):
 
     decoded = bytearray()
     for line in dump.splitlines():
+        if not line:
+            continue
         try:
             cropped = line.split("|", 2)[0]
             mark, data = cropped.split(" ", 1)
@@ -119,11 +127,11 @@ def chexundump(dump):
             if len(data) % 2 != 0:
                 raise ValueError("odd sized data")
             if offset > len(decoded):
-                decoded.extend([0] * (offset - len(decoded)))
+                decoded.extend([0] * (offset - len(decoded) - base))
             decoded.extend([int(data[i:i+2], 16) for i \
                             in range(0, len(data), 2)])
         except (ValueError, TypeError) as exc:
-            raise ValueError("can't decode line: %s", line) from exc
+            raise ValueError(f"can't decode line: {line:r}") from exc
 
     return decoded
 

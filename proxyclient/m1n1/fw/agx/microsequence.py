@@ -80,7 +80,7 @@ class BufferManagerInfo(ConstructClass):
         "unk_10" / Int32ul,
         "gpu_counter2" / Int32ul,
         "unk_18" / Int32ul,
-        Ver("..13.0 beta4", "unk_1c" / Int32ul),
+        Ver("V < V13_0B4", "unk_1c" / Int32ul),
         "page_list_addr" / Int64ul,
         "page_list_size" / Int32ul,
         "page_count" / Int32ul,
@@ -131,8 +131,8 @@ class BufferManagerInfo(ConstructClass):
         self.unk_78 = 0x0
         self.unk_7c = 0x0
         self.unk_80 = 0x1
-        self.unk_84 = 0x3468
-        self.unk_88 = 0x1178
+        self.unk_84 = 0x66cc
+        self.unk_88 = 0x2244
         self.unk_8c = 0x0
         self.unk_90 = bytes(0x30)
 
@@ -186,7 +186,7 @@ class AuxFBInfo(ConstructClass):
         "unk2" / Int32ul,
         "width" / Dec(Int32ul),
         "height" / Dec(Int32ul),
-        Ver("13.0 beta4", "unk3" / Int64ul),
+        Ver("V >= V13_0B4", "unk3" / Int64ul),
     )
 
     def __init__(self, unk1, unk2, width, height):
@@ -203,8 +203,8 @@ class Start3DStruct1(ConstructClass):
         "store_pipeline_addr" / Int32ul,
         "unk_8" / Int32ul,
         "unk_c" / Int32ul,
-        "uuid1" / Int32ul,
-        "uuid2" / Int32ul,
+        "merge_upper_x" / Float32l,
+        "merge_upper_y" / Float32l,
         "unk_18" / Int64ul,
         "tile_blocks_y" / Int16ul, # * 4
         "tile_blocks_x" / Int16ul, # * 4
@@ -217,10 +217,11 @@ class Start3DStruct1(ConstructClass):
         "unk_36" / Int16ul,
         "unk_38" / Int32ul,
         "unk_3c" / Int32ul,
-        "unk_40_padding" / HexDump(Bytes(0xb0)),
+        "unk_40" / Int32ul,
+        "unk_44_padding" / HexDump(Bytes(0xac)),
         "depth_bias_array" / Start3DArrayAddr,
         "scissor_array" / Start3DArrayAddr,
-        "unk_110" / Int64ul,
+        "visibility_result_buffer" / Int64ul,
         "unk_118" / Int64ul,
         "unk_120" / Array(37, Int64ul),
         "unk_reload_pipeline" / Start3DClearPipelineBinding,
@@ -236,13 +237,14 @@ class Start3DStruct1(ConstructClass):
         "unk_2a8" / Int64ul,
         "depth_buffer_ptr2" / Int64ul,
         "depth_buffer_ptr3" / Int64ul,
-        "unk_2c0" / Int64ul,
+        "depth_aux_buffer_ptr" / Int64ul,
         "stencil_buffer_ptr1" / Int64ul,
         "unk_2d0" / Int64ul,
         "unk_2d8" / Int64ul,
         "stencil_buffer_ptr2" / Int64ul,
         "stencil_buffer_ptr3" / Int64ul,
-        "unk_2f0" / Array(3, Int64ul),
+        "stencil_aux_buffer_ptr" / Int64ul,
+        "unk_2f8" / Array(2, Int64ul),
         "aux_fb_unk0" / Int32ul,
         "unk_30c" / Int32ul,
         "aux_fb" / AuxFBInfo,
@@ -257,7 +259,7 @@ class Start3DStruct1(ConstructClass):
         "unk_37c" / Int32ul,
         "unk_380" / Int64ul,
         "unk_388" / Int64ul,
-        Ver("13.0 beta4", "unk_390_0" / Int64ul),
+        Ver("V >= V13_0B4", "unk_390_0" / Int64ul),
         "depth_dimensions" / Int64ul,
     )
 
@@ -270,13 +272,24 @@ class Start3DStruct2(ConstructClass):
         "depth_bias_array" / Int64ul,
         "aux_fb" / AuxFBInfo,
         "depth_dimensions" / Int64ul,
-        "unk_48" / Int64ul,
+        "visibility_result_buffer" / Int64ul,
         "depth_flags" / Int64ul, # 0x40000 - has stencil 0x80000 - has depth
+        Ver("G >= G14", "unk_58_g14_0" / Int64ul),
+        Ver("G >= G14", "unk_58_g14_8" / Int64ul),
         "depth_buffer_ptr1" / Int64ul,
         "depth_buffer_ptr2" / Int64ul,
         "stencil_buffer_ptr1" / Int64ul,
         "stencil_buffer_ptr2" / Int64ul,
-        "unk_68" / Array(12, Int64ul),
+        Ver("G >= G14", "unk_68_g14_0" / HexDump(Bytes(0x20))),
+        "unk_78" / Array(4, Int64ul),
+        "depth_aux_buffer_ptr1" / Int64ul,
+        "unk_a0" / Int64ul,
+        "depth_aux_buffer_ptr2" / Int64ul,
+        "unk_b0" / Int64ul,
+        "stencil_aux_buffer_ptr1" / Int64ul,
+        "unk_c0" / Int64ul,
+        "stencil_aux_buffer_ptr2" / Int64ul,
+        "unk_d0" / Int64ul,
         "tvb_tilemap" / Int64ul,
         "tvb_heapmeta_addr" / Int64ul,
         "unk_e8" / Int64ul,
@@ -289,8 +302,10 @@ class Start3DStruct2(ConstructClass):
         "unk_148" / Int64ul,
         "unk_150" / Int64ul,
         "unk_158" / Int64ul,
-        "unk_160_padding" / HexDump(Bytes(0x1e0)),
-        Ver("..13.0 beta4", ZPadding(8)),
+        "unk_160" / Int64ul,
+        Ver("G < G14", "unk_168_padding" / HexDump(Bytes(0x1d8))),
+        Ver("G >= G14", "unk_198_padding" / HexDump(Bytes(0x1a8))),
+        Ver("V < V13_0B4", ZPadding(8)),
     )
 
 class BufferThing(ConstructClass):
@@ -330,7 +345,7 @@ class Start3DStruct7(ConstructClass):
         "stamp2" / ROPointer(this.stamp2_addr.value, StampCounter),
         "stamp_value" / Int32ul,
         "ev_3d" / Int32ul,
-        "unk_20" / Int32ul,
+        "evctl_index" / Int32ul,
         "unk_24" / Int32ul,
         "uuid" / Int32ul,
         "prev_stamp_value" / Int32ul,
@@ -389,8 +404,8 @@ class Start3DCmd(ConstructClass):
         "attachments" / Array(16, Attachment),
         "num_attachments" / Int32ul,
         "unk_190" / Int32ul,
-        Ver("13.0 beta4", "unk_194" / Int64ul),
-        Ver("13.0 beta4", "unkptr_19c" / Int64ul),
+        Ver("V >= V13_0B4", "unk_194" / Int64ul),
+        Ver("V >= V13_0B4", "unkptr_19c" / Int64ul),
     )
 
 
@@ -421,9 +436,10 @@ class Finalize3DCmd(ConstructClass):
         "unk_7c" / Int64ul, # 0
         "unk_84" / Int64ul, # 0
         "unk_8c" / Int64ul, # 0
+        Ver("G >= G14", "unk_8c_g14" / Int64ul),
         "restart_branch_offset" / Int32sl,
         "unk_98" / Int32ul, # 1
-        Ver("13.0 beta4", "unk_9c" / HexDump(Bytes(0x10))),
+        Ver("V >= V13_0B4", "unk_9c" / HexDump(Bytes(0x10))),
     )
 
 class TilingParameters(ConstructClass):
@@ -448,32 +464,34 @@ class StartTACmdStruct2(ConstructClass):
         "unk_8" / Hex(Int32ul),
         "unk_c" / Hex(Int32ul),
         "tvb_tilemap" / Hex(Int64ul),
-        "unkptr_18" / Hex(Int64ul),
-        "unkptr_20" / Hex(Int64ul),
+        Ver("G < G14", "tvb_cluster_tilemaps" / Hex(Int64ul)),
+        "tpc" / Hex(Int64ul),
         "tvb_heapmeta_addr" / Hex(Int64ul), # like Start3DStruct2.tvb_end_addr with bit 63 set?
         "iogpu_unk_54" / Int32ul,
         "iogpu_unk_55" / Int32ul,
         "iogpu_unk_56" / Int64ul,
-        "unk_40" / Int64ul,
+        Ver("G < G14", "tvb_cluster_meta1" / Int64ul),
         "unk_48" / Int64ul,
         "unk_50" / Int64ul,
         "tvb_heapmeta_addr2" / Int64ul,
-        "unk_60" / Int64ul,
-        "unk_68" / Int64ul,
+        Ver("G < G14", "unk_60" / Int64ul),
+        Ver("G < G14", "core_mask" / Int64ul),
         "iogpu_deflake_1" / Int64ul,
         "iogpu_deflake_2" / Int64ul,
         "unk_80" / Int64ul,
-        "iogpu_deflake_3" / Int64ul, # context_id in bits 55:48
+        "iogpu_deflake_3" / Int64ul, # bit 50 set
         "encoder_addr" / Int64ul,
-        "unk_98" / Array(2, Hex(Int64ul)),
-        "unk_a8" / Int64ul,
+        Ver("G < G14", "tvb_cluster_meta2" / Int64ul),
+        Ver("G < G14", "tvb_cluster_meta3" / Int64ul),
+        Ver("G < G14", "tiling_control" / Int64ul),
         "unk_b0" / Array(6, Hex(Int64ul)),
         "pipeline_base" / Int64ul,
-        "unk_e8" / Int64ul,
-        "unk_f0" / Int64ul,
+        Ver("G < G14", "tvb_cluster_meta4" / Int64ul),
+        Ver("G < G14", "unk_f0" / Int64ul),
         "unk_f8" / Int64ul,
         "unk_100" / Array(3, Hex(Int64ul)),
         "unk_118" / Int32ul,
+        Ver("G >= G14", Padding(8 * 9)),
     )
 
 class StartTACmdStruct3(ConstructClass):
@@ -506,7 +524,7 @@ class StartTACmdStruct3(ConstructClass):
         "stamp2" / ROPointer(this.stamp2_addr.value, StampCounter),
         "stamp_value" / Int32ul,
         "ev_ta" / Int32ul,
-        "unk_580" / Int32ul,
+        "evctl_index" / Int32ul, # 0-3
         "unk_584" / Int32ul,
         "uuid2" / Int32ul,
         "prev_stamp_value" / Int32ul,
@@ -552,9 +570,9 @@ class StartTACmd(ConstructClass):
         "unk_16c" / Int32ul,
         "unk_170" / Int64ul,
         "unk_178" / Int32ul,
-        Ver("13.0 beta4", "unk_17c" / Int32ul),
-        Ver("13.0 beta4", "unkptr_180" / Int64ul),
-        Ver("13.0 beta4", "unk_188" / Int32ul),
+        Ver("V >= V13_0B4", "unk_17c" / Int32ul),
+        Ver("V >= V13_0B4", "unkptr_180" / Int64ul),
+        Ver("V >= V13_0B4", "unk_188" / Int32ul),
     )
 
 class FinalizeTACmd(ConstructClass):
@@ -582,9 +600,10 @@ class FinalizeTACmd(ConstructClass):
         "unk_60" / Int32ul,
         "unk_64" / Int32ul,
         "unk_68" / Int32ul,
+        Ver("G >= G14", "unk_6c_g14" / Int64ul),
         "restart_branch_offset" / Int32sl,
         "unk_70" / Int32ul,
-        Ver("13.0 beta4", "unk_74" / HexDump(Bytes(0x10))),
+        Ver("V >= V13_0B4", "unk_74" / HexDump(Bytes(0x10))),
     )
 
 class ComputeArgs(ConstructClass):
@@ -664,16 +683,6 @@ class StartComputeCmd(ConstructClass):
         "padding" / Bytes(0x154 - 0x4c),
     )
 
-    def parsed(self, ctx):
-        try:
-            if self.padding != b"\x00" * (0x154 - 0x4c):
-                raise ExplicitError("padding is not zero")
-            del self.padding
-            self._keys = [x for x in self._keys if x != "padding"]
-        except AttributeError:
-            pass
-
-
 class FinalizeComputeCmd(ConstructClass):
     subcon = Struct( # 0x64 bytes''''
         "magic" / Const(0x2a, Int32ul),
@@ -695,6 +704,7 @@ class FinalizeComputeCmd(ConstructClass):
         "unk_50" / Int32ul,
         "unk_54" / Int32ul,
         "unk_58" / Int32ul,
+        Ver("G >= G14", "unk_5c_g14" / Int64ul),
         "restart_branch_offset" / Int32sl, # realative offset from start of Finalize to StartComputeCmd
         "unk_60" / Int32ul,
     )
@@ -728,7 +738,7 @@ class TimestampCmd(ConstructClass):
         "ts2" / ROPointer(this.ts2_addr, TimeStamp),
         "cmdqueue_ptr" / Int64ul,
         "unk_24" / Int64ul,
-        Ver("13.0 beta4", "unkptr_2c_0" / Int64ul),
+        Ver("V >= V13_0B4", "unkptr_2c_0" / Int64ul),
         "uuid" / Int32ul,
         "unk_30_padding" / Int32ul,
     )
