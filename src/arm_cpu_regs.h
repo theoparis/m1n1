@@ -336,3 +336,203 @@
 #define VTCR_SL0   GENMASK(7, 6)
 #define VTCR_SL0   GENMASK(7, 6)
 #define VTCR_T0SZ  GENMASK(5, 0)
+
+#define SYS_PMCR_EL0 sys_reg(3, 0, 9, 12, 0)
+#define PMCR_RESERVED GENMASK(63, 33)
+#define PMCR_FZS BIT(32) //Freeze on Statistical Profiling Buffer Management event. (PMBLIMITR_EL1.{PMFZ,E} == {1,1} and PMBSR_EL1.S == 0b1)
+#define PMCR_IMP GENMASK(31, 24) //implementer code
+#define PMCR_IDCODE GENMASK(23, 16) //deprecated as per arm spec
+#define PMCR_N GENMASK(15, 11) //number of event counters implemented
+#define PMCR_RESERVED_2 BIT(10)
+#define PMCR_FZO BIT(9) // stop event counters on overflow
+#define PMCR_RESERVED_3 BIT(8)
+#define PMCR_LP BIT(7) // enable long event counters
+#define PMCR_LC BIT(6) //enable long cycle counters
+#define PMCR_DP BIT(5) //disable cycle counter when event counting is disallowed
+#define PMCR_X BIT(4) //export PMU events over IMPDEF bus
+#define PMCR_D BIT(3) //set PMCCNTR to count every cycle or every 64 cycles
+#define PMCR_C BIT(2) //reset PMCCNTR
+#define PMCR_P BIT(1) //reset other event counters
+#define PMCR_E BIT(0) //enable
+
+
+
+#define SYS_PMCCNTR_EL0 sys_reg(3, 3, 9, 13, 0)
+#define PMCCNTR_CCNT GENMASK(63, 0)
+
+#define SYS_PMCCFILTR_EL0 sys_reg(3, 3, 14, 15, 7)
+#define PMCCFILTR_RESERVED GENMASK(63, 32)
+#define PMCCFILTR_P BIT(31) //sets if el1 can count cycles
+#define PMCCFILTR_U BIT(30) //sets if el0 can count cycles
+#define PMCCFILTR_NSK BIT(29) //if el3 implemented (not in the Apple case) - further restricts el1 counting
+#define PMCCFILTR_NSU BIT(28) //ditto but for el0 counting
+#define PMCCFILTR_NSH BIT(27) //ditto for non-secure el2
+#define PMCCFILTR_M BIT(26) //ditto for secure EL3
+#define PMCCFILTR_RESERVED_2 BIT(25)
+#define PMCCFILTR_SH BIT(24) //secure el2 filter
+#define PMCCFILTR_T BIT(23) //nontransactional filtering bit
+#define PMCCFILTR_RLK BIT(22) // realm el1 filter bit
+#define PMCCFILTR_RLU BIT(21) // realm el0 filter bit
+#define PMCCFILTR_RLH BIT(20) // realm el2 filter bit
+#define PMCCFILTR_RESERVED GENMASK(19, 0)
+
+#define SYS_PMCEID0_EL0 sys_reg(3, 3, 9, 12, 6)
+#define PMCEID0_IDHI GENMASK(63, 32)
+#define PMCEID0_IDLO GENMASK(31, 0)
+//offset by 0x20 because reasons
+#define SYS_PMCEID1_EL0 sys_reg(3, 3, 9, 12, 7)
+#define PMCEID1_IDHI PMCEID0_IDHI
+#define PMCEID1_IDLO PMCEID0_IDLO
+
+#define SYS_PMCNTENCLR_EL0 sys_reg(3, 3, 9, 12, 2) //perf mon counter enable clear (disable reg)
+#define PMCNTENCLR_RESERVED GENMASK(63, 32)
+#define PMCNTENCLR_C BIT(31) //disables the PMCCNTR_EL0 reg when written to with 1
+#define PMCNTENCLR_P GENMASK(30, 0) //disables each individual event counter when written to
+#define PMCNTENCLR_P0 BIT(0)
+#define PMCNTENCLR_P1 BIT(1)
+#define PMCNTENCLR_P2 BIT(2)
+#define PMCNTENCLR_P3 BIT(3)
+#define PMCNTENCLR_P4 BIT(4)
+#define PMCNTENCLR_P5 BIT(5)
+#define PMCNTENCLR_P6 BIT(6)
+#define PMCNTENCLR_P7 BIT(7)
+#define PMCNTENCLR_P8 BIT(8)
+#define PMCNTENCLR_P9 BIT(9)
+#define PMCNTENCLR_P10 BIT(10)
+#define PMCNTENCLR_P11 BIT(11)
+#define PMCNTENCLR_P12 BIT(12)
+#define PMCNTENCLR_P13 BIT(13)
+#define PMCNTENCLR_P14 BIT(14)
+#define PMCNTENCLR_P15 BIT(15)
+#define PMCNTENCLR_P16 BIT(16)
+#define PMCNTENCLR_P17 BIT(17)
+#define PMCNTENCLR_P18 BIT(18)
+#define PMCNTENCLR_P19 BIT(19)
+#define PMCNTENCLR_P20 BIT(20)
+#define PMCNTENCLR_P21 BIT(21)
+#define PMCNTENCLR_P22 BIT(22)
+#define PMCNTENCLR_P23 BIT(23)
+#define PMCNTENCLR_P24 BIT(24)
+#define PMCNTENCLR_P25 BIT(25)
+#define PMCNTENCLR_P26 BIT(26)
+#define PMCNTENCLR_P27 BIT(27)
+#define PMCNTENCLR_P28 BIT(28)
+#define PMCNTENCLR_P29 BIT(29)
+#define PMCNTENCLR_P30 BIT(30)
+
+#define SYS_PMCNTENSET_EL0 sys_reg(3, 3, 9, 12, 1)
+#define PMCNTENSET_RESERVED GENMASK(63, 32)
+#define PMCNTENSET_C BIT(31) //enables the PMCCNTR_EL0 reg when written to with 1
+#define PMCNTENSET_P GENMASK(30, 0) //enables each individual event counter when written to
+#define PMCNTENSET_P0 BIT(0)
+#define PMCNTENSET_P1 BIT(1)
+#define PMCNTENSET_P2 BIT(2)
+#define PMCNTENSET_P3 BIT(3)
+#define PMCNTENSET_P4 BIT(4)
+#define PMCNTENSET_P5 BIT(5)
+#define PMCNTENSET_P6 BIT(6)
+#define PMCNTENSET_P7 BIT(7)
+#define PMCNTENSET_P8 BIT(8)
+#define PMCNTENSET_P9 BIT(9)
+#define PMCNTENSET_P10 BIT(10)
+#define PMCNTENSET_P11 BIT(11)
+#define PMCNTENSET_P12 BIT(12)
+#define PMCNTENSET_P13 BIT(13)
+#define PMCNTENSET_P14 BIT(14)
+#define PMCNTENSET_P15 BIT(15)
+#define PMCNTENSET_P16 BIT(16)
+#define PMCNTENSET_P17 BIT(17)
+#define PMCNTENSET_P18 BIT(18)
+#define PMCNTENSET_P19 BIT(19)
+#define PMCNTENSET_P20 BIT(20)
+#define PMCNTENSET_P21 BIT(21)
+#define PMCNTENSET_P22 BIT(22)
+#define PMCNTENSET_P23 BIT(23)
+#define PMCNTENSET_P24 BIT(24)
+#define PMCNTENSET_P25 BIT(25)
+#define PMCNTENSET_P26 BIT(26)
+#define PMCNTENSET_P27 BIT(27)
+#define PMCNTENSET_P28 BIT(28)
+#define PMCNTENSET_P29 BIT(29)
+#define PMCNTENSET_P30 BIT(30)
+
+//for now only define PMEVCNTR0
+#define SYS_PMEVCNTR0_EL0 sys_reg(3, 3, 13, 8, 0)
+#define PMEVCNTR_COUNTER GENMASK(63, 0)
+
+#define SYS_PMEVTYPER0_EL0 sys_reg(3, 3, 14, 12, 0)
+#define PMEVTYPER_TC GENMASK(63, 61)
+#define PMEVTYPER_RESERVED GENMASK(60, 44)
+#define PMEVTYPER_TH GENMASK(43, 32)
+#define PMEVTYPER_P BIT(31) //controls el1 counting
+#define PMEVTYPER_U BIT(30) //controls el0 counting
+#define PMEVTYPER_NSK BIT(29) //el1 non-secure counting when el3 is implemented
+#define PMEVTYPER_NSU BIT(28) //el0 non-secure counting when el3 implemented
+#define PMEVTYPER_NSH BIT(27) //controls el2 counting
+#define PMEVTYPER_M BIT(26) //controls el3 counting
+#define PMEVTYPER_MT BIT(25) //multithreaded event counting
+#define PMEVTYPER_SH BIT(24) //controls secure el2 counting (not implemented on Apple)
+#define PMEVTYPER_T BIT(23) //transactional state filter
+#define PMEVTYPER_RLK BIT(22) //realm el1 filter bit
+#define PMEVTYPER_RLU BIT(21) //realm el0 filter bit
+#define PMEVTYPER_RLH BIT(20) //realm el2 filter bit
+#define PMEVTYPER_RESERVED_2 GENMASK(19, 16)
+#define PMEVTYPER_EVTCOUNT GENMASK(15, 10)
+#define PMEVTYPER_EVTCOUNT2 GENMASK(9, 0)
+
+
+#define SYS_PMINTENCLR_EL1 sys_reg(3, 0, 9, 14, 2)
+#define PMINTENCLR_RESERVED GENMASK(63, 32)
+#define PMINTENCLR_C BIT(31) //cycle counter overflow irq is disabled if 1 is written to here
+#define PMINTENCLR_P GENMASK(30, 0)
+
+/**
+ * TODO: define PMINTENCLR_P bits here
+ * 
+ */
+
+#define SYS_PMINTENSET_EL1 sys_reg(3, 0, 9, 14, 1)
+#define PMINTENSET_RESERVED GENMASK(63, 32)
+#define PMINTENSET_C BIT(31) //cycle count overflow irq enable if 1 written to here
+#define PMINTENSET_P PMINTENCLR_P
+
+
+#define SYS_PMMIR_EL1 sys_reg(3, 0, 9, 13, 5)
+#define PMMIR_RESERVED GENMASK(63, 24)
+#define PMMIR_THWIDTH GENMASK(23, 20)
+#define PMMIR_BUS_WIDTH GENMASK(19, 16)
+#define PMMIR_BUS_SLOTS GENMASK(15, 8)
+#define PMMIR_SLOTS GENMASK(7, 0)
+
+
+#define SYS_PMOVSCLR_EL0 sys_reg(3, 3, 9, 12, 3)
+#define PMOVSCLR_RESERVED GENMASK(63, 32)
+#define PMOVSCLR_C BIT(31) //if 1, cycle counter has overflowed, when written to, clears overflow bit
+#define PMOVSCLR_P GENMASK(30, 0)
+
+#define SYS_PMOVSSET_EL0 sys_reg(3, 3, 9, 14, 3)
+#define PMOVSSET_RESERVED PMOVSCLR_RESERVED
+#define PMOVSSET_C BIT(31)
+#define PMOVSSET_P GENMASK(30, 0)
+
+
+#define SYS_PMSELR_EL0 sys_reg(3, 3, 9, 12, 5)
+#define PMSELR_RESERVED GENMASK(63, 5)
+#define PMSELR_SEL GENMASK(4, 0)
+
+#define SYS_PMSWINC_EL0 sys_reg(3, 3, 9, 12, 4)
+#define PMSWINC_RESERVED GENMASK(63, 31)
+#define PMSWINC_P GENMASK(30, 0)
+
+#define SYS_PMUSERENR_EL0 sys_reg(3, 3, 9, 14, 0)
+#define PMUSERENR_RESERVED GENMASK(63, 4)
+#define PMUSERENR_ER BIT(3) //enables or disables user access to event counters
+#define PMUSERENR_CR BIT(2) //enables/disables user mode access to cycle counters
+#define PMUSERENR_SW BIT(1) //traps software increments to el1
+#define PMUSERENR_EN BIT(0) //enables/disables all pmu access from el0
+
+#define SYS_PMXEVCNTR_EL0 sys_reg(3, 3, 9, 13, 2)
+#define PMXEVCNTR_VALUE_MASK GENMASK(63, 0)
+
+#define SYS_PMXEVTYPER_EL0 sys_reg(3, 3, 9, 13, 1)
+#define PMXEVTYPER_VALUE_MASK GENMASK(63, 0)
