@@ -14,7 +14,6 @@ static void init_common_icestorm(void)
     // violation"
     reg_set(SYS_IMP_APL_EHID10, HID10_FORCE_WAIT_STATE_DRAIN_UC | HID10_DISABLE_ZVA_TEMPORAL_TSO);
 
-    // Disable SMC trapping to EL2
     // m1n1_windows change: as we're booting true UEFI/Windows, allow SMCs to be trapped to EL2 
     // (no EL3, and HCR_EL2.TSC is not writable on Apple platforms [it's role is taken over by this register])
     //reg_clr(SYS_IMP_APL_EHID20, EHID20_TRAP_SMC);
