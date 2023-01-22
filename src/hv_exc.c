@@ -253,6 +253,276 @@ static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(SYS_IMP_APL_PMC7)
         SYSREG_PASS(SYS_IMP_APL_PMC8)
         SYSREG_PASS(SYS_IMP_APL_PMC9)
+        /* m1n1_windows change - Trap the ARM standard PMU regs */
+        case SYSREG_ISS(SYS_PMCR_EL0):
+            if(is_read) {
+                //printf("canary1\n");
+                regs[rt] = mrs(SYS_IMP_APL_PMCR0);
+            }
+            else {
+                /* check what we're enabling */
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & PMCR_E) {
+                    printf("msr(PMCR_EL0, 0x%08lx): enabling pmu irqs\n", regs[rt]);
+                    val |= PMCR0_IMODE_FIQ;
+                }
+                else {
+                    val &= ~(PMCR0_IMODE_FIQ);
+                    val |= PMCR0_IMODE_OFF;
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        SYSREG_MAP(SYS_PMCCNTR_EL0, SYS_IMP_APL_PMC0)
+        case SYSREG_ISS(SYS_PMCCFILTR_EL0):
+            if(is_read) {
+                regs[rt] = mrs(SYS_IMP_APL_PMCR1);
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR1);
+                if(regs[rt] & PMCCFILTR_P) {
+                    printf("msr(PMCCFILTR_EL0, 0x%08lx): enabling el1 counting of cycles\n", regs[rt]);
+                    val |= BIT(16);
+                }
+                msr(SYS_IMP_APL_PMCR1, val);
+            }
+            return true;
+        SYSREG_PASS(SYS_PMCEID0_EL0)
+        SYSREG_PASS(SYS_PMCEID1_EL0)
+        case SYSREG_ISS(SYS_PMCNTENCLR_EL0):
+            if(is_read) {
+                if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 0)) {
+                    regs[rt] = (mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 1));
+                    if(mrs(SYS_IMP_APL_PMCR0) & BIT(0)) {
+                        regs[rt] |= BIT(31);
+                    }
+                }
+                else {
+                    regs[rt] = 0;
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & PMCNTENCLR_C) {
+                    printf("msr(PMCNTENCLR_EL0, 0x%08lx): disabling cycle counter\n", regs[rt]);
+                    val &= ~(BIT(0));
+                }
+                if(regs[rt] & PMCNTENCLR_P0) {
+                    printf("msr(PMCNTENCLR_EL0, 0x%08lx): disabling a PMC counter\n", regs[rt]);
+                    val &= ~(BIT(2));
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMCNTENSET_EL0):
+            if(is_read) {
+                if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 0)) {
+                    regs[rt] = (mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 1));
+                    if(mrs(SYS_IMP_APL_PMCR0) & BIT(0)) {
+                        regs[rt] |= BIT(31);
+                    }
+                }
+                else {
+                    regs[rt] = 0;
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & PMCNTENSET_C) {
+                    printf("msr(PMCNTENSET_EL0, 0x%08lx): enabling cycle counter\n", regs[rt]);
+                    val |= BIT(0);
+                }
+                if(regs[rt] & PMCNTENSET_P0) {
+                    printf("msr(PMCNTENSET_EL0, 0x%08lx): enabling a PMC counter\n", regs[rt]);
+                    val |= BIT(2);
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        SYSREG_MAP(SYS_PMEVCNTR0_EL0, SYS_IMP_APL_PMC2)
+        case SYSREG_ISS(SYS_PMEVTYPER0_EL0):
+            if(is_read) {
+                regs[rt] = 0;
+                int value = mrs(SYS_IMP_APL_PMCR1);
+                if(value & GENMASK(23, 16)) {
+                    regs[rt] |= BIT(31); //privileged bit
+                }
+                if(value & GENMASK(15, 8)) {
+                    regs[rt] |= BIT(30); //user filter bit
+                }
+                regs[rt] |= (mrs(SYS_IMP_APL_PMESR0) & GENMASK(7, 0));
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR1);
+                int event = mrs(SYS_IMP_APL_PMESR0) & GENMASK(7, 0);
+                if(regs[rt] & PMEVTYPER_P) {
+                    printf("msr(PMEVTYPER0_EL0, 0x%08lx): enabling el1 counting of event\n", regs[rt]);
+                    val |= BIT(16);
+                }
+                if(regs[rt] & GENMASK(7, 0)) {
+                    printf("msr(PMEVTYPER0_EL0, 0x%08lx): setting event\n", regs[rt]);
+                    event |= regs[rt] & GENMASK(7, 0);
+                    msr(SYS_IMP_APL_PMESR0, event);
+                }
+                msr(SYS_IMP_APL_PMCR1, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMINTENCLR_EL1):
+            if(is_read) {
+                if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 12)) {
+                    regs[rt] = ((mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 13)) >> 13);
+                    if(mrs(SYS_IMP_APL_PMCR0) & BIT(12)) {
+                        regs[rt] |= BIT(31);
+                    }
+                }
+                else {
+                    regs[rt] = 0;
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & PMINTENCLR_C) {
+                    printf("msr(PMINTENCLR_EL0, 0x%08lx): disabling cycle counter IRQ\n", regs[rt]);
+                    val &= ~(BIT(12));
+                }
+                if (regs[rt] & BIT(0)) {
+                    printf("msr(PMINTENCLR_EL0, 0x%08lx): disabling a event counter IRQ\n", regs[rt]);
+                    val &= ~(BIT(14));
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMINTENSET_EL1):
+            if(is_read) {
+                if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 12)) {
+                    regs[rt] = ((mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 13)) >> 13);
+                    if(mrs(SYS_IMP_APL_PMCR0) & BIT(12)) {
+                        regs[rt] |= BIT(31);
+                    }
+                }
+                else {
+                    regs[rt] = 0;
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & PMINTENCLR_C) {
+                    printf("msr(PMINTENCLR_EL0, 0x%08lx): disabling cycle counter IRQ\n", regs[rt]);
+                    val |= BIT(12);
+                }
+                if (regs[rt] & BIT(0)) {
+                    printf("msr(PMINTENCLR_EL0, 0x%08lx): disabling a event counter IRQ\n", regs[rt]);
+                    val |= BIT(14); //enable pmc2 irq
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMMIR_EL1):
+            //for now discard writes, this is likely to change
+            if(is_read) {
+                regs[rt] = 0;
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMOVSCLR_EL0):
+            if(is_read) {
+                int val = mrs(SYS_IMP_APL_PMSR);
+                if(val) {
+                    if(val & BIT(0)) {
+                        regs[rt] |= BIT(31);
+                    }
+                    regs[rt] |= ((val & GENMASK(9, 1)) >> 1);
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMSR);
+                if(regs[rt] & PMOVSCLR_C) {
+                    printf("msr(PMOVSCLR_EL0, 0x%08lx): clearing cycle counter overflow\n", regs[rt]);
+                    val &= ~(BIT(0));
+                }
+                if(regs[rt] & BIT(0)) {
+                    printf("msr(PMOVSCLR_EL0, 0x%08lx): clearing event counter overflow\n", regs[rt]);
+                    val &= ~(BIT(2));
+                }
+                //msr(SYS_IMP_APL_PMSR, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMOVSSET_EL0):
+            if(is_read) {
+                int val = mrs(SYS_IMP_APL_PMSR);
+                if(val) {
+                    if(val & BIT(0)) {
+                        regs[rt] |= BIT(31);
+                    }
+                    regs[rt] |= ((val & GENMASK(9, 1)) >> 1);
+                }
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMSR);
+                if(regs[rt] & PMOVSCLR_C) {
+                    printf("msr(PMOVSCLR_EL0, 0x%08lx): setting cycle counter overflow\n", regs[rt]);
+                    val |= BIT(0);
+                }
+                if(regs[rt] & BIT(0)) {
+                    printf("msr(PMOVSCLR_EL0, 0x%08lx): setting event counter overflow\n", regs[rt]);
+                    val |= BIT(2);
+                }
+                msr(SYS_IMP_APL_PMSR, val);
+            }
+            return true;
+        case SYSREG_ISS(SYS_PMSELR_EL0):
+            //for now hardcode to 0, this will very likely need to change
+            if(is_read) {
+                regs[rt] = 0;
+            }
+            return true;
+        SYSREG_MAP(SYS_PMSWINC_EL0, SYS_IMP_APL_PMC3)
+        case SYSREG_ISS(SYS_PMUSERENR_EL0):
+            if(is_read) {
+                int user_enabled = ((mrs(SYS_IMP_APL_PMCR0) & BIT(30)) >> 30);
+                if(user_enabled) {
+                    regs[rt] = BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0);
+                }
+                else {
+                    regs[rt] = 0;
+                }
+            }
+            else {
+                printf("msr(PMUSERENR_EL0, 0x%08lx): changing user mode access to PMCs\n", regs[rt]);
+                int val = mrs(SYS_IMP_APL_PMCR0);
+                if(regs[rt] & (BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0))) {
+                    val |= BIT(30);
+                }
+                msr(SYS_IMP_APL_PMCR0, val);
+            }
+            return true;
+        SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
+        case SYSREG_ISS(SYS_PMXEVTYPER_EL0):
+            if(is_read) {
+                regs[rt] = 0;
+                int value = mrs(SYS_IMP_APL_PMCR1);
+                if(value & GENMASK(23, 16)) {
+                    regs[rt] |= BIT(31); //privileged bit
+                }
+                if(value & GENMASK(15, 8)) {
+                    regs[rt] |= BIT(30); //user filter bit
+                }
+                regs[rt] |= (mrs(SYS_IMP_APL_PMESR0) & GENMASK(7, 0));
+            }
+            else {
+                int val = mrs(SYS_IMP_APL_PMCR1);
+                int event = mrs(SYS_IMP_APL_PMESR0) & GENMASK(7, 0);
+                if(regs[rt] & PMEVTYPER_P) {
+                    printf("msr(PMEVTYPER0_EL0, 0x%08lx): enabling el1 counting of event\n", regs[rt]);
+                    val |= BIT(16);
+                }
+                if(regs[rt] & GENMASK(7, 0)) {
+                    printf("msr(PMEVTYPER0_EL0, 0x%08lx): setting event\n", regs[rt]);
+                    event |= regs[rt] & GENMASK(7, 0);
+                    msr(SYS_IMP_APL_PMESR0, event);
+                }
+                msr(SYS_IMP_APL_PMCR1, val);
+            }
+            return true;
 
         /* Outer Sharable TLB maintenance instructions */
         SYSREG_PASS(sys_reg(1, 0, 8, 1, 0)) // TLBI VMALLE1OS

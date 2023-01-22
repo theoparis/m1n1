@@ -1331,6 +1331,7 @@ class HV(Reloadable):
             hacr.TRAP_HID = 1
             hacr.TRAP_ACC = 1
             hacr.TRAP_IPI = 1
+            hacr.TRAP_PMUV3 = 1
             hacr.TRAP_SERROR_INFO = 1 # M1RACLES mitigation
             hacr.TRAP_PM = 1
         self.u.msr(HACR_EL2, hacr.value)
@@ -1755,13 +1756,11 @@ class HV(Reloadable):
 
         print("Shutting down framebuffer...")
         self.p.fb_shutdown(True)
-        #avoid enabling SPRR/GXF for now
-        #not running macOS
-        #print("Enabling SPRR...")
-        #self.u.msr(SPRR_CONFIG_EL1, 1)
+        print("Enabling SPRR...")
+        self.u.msr(SPRR_CONFIG_EL1, 1)
 
-        #print("Enabling GXF...")
-        #self.u.msr(GXF_CONFIG_EL1, 1)
+        print("Enabling GXF...")
+        self.u.msr(GXF_CONFIG_EL1, 1)
 
         print(f"Jumping to entrypoint at 0x{self.entry:x}")
 

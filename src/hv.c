@@ -78,6 +78,11 @@ void hv_init(void)
     // No guest vectors initially
     msr(VBAR_EL12, 0);
 
+    //set up a HACR bit (56)
+    uint64_t hacr_val = mrs(HACR_EL2);
+    hacr_val |= BIT(26);
+    msr(HACR_EL2, hacr_val);
+
     // Compute tick interval
     hv_tick_interval = mrs(CNTFRQ_EL0) / HV_TICK_RATE;
 
