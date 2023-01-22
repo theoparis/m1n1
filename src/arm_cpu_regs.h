@@ -337,7 +337,7 @@
 #define VTCR_SL0   GENMASK(7, 6)
 #define VTCR_T0SZ  GENMASK(5, 0)
 
-#define SYS_PMCR_EL0 sys_reg(3, 0, 9, 12, 0)
+#define SYS_PMCR_EL0 sys_reg(3, 3, 9, 12, 0)
 #define PMCR_RESERVED GENMASK(63, 33)
 #define PMCR_FZS BIT(32) //Freeze on Statistical Profiling Buffer Management event. (PMBLIMITR_EL1.{PMFZ,E} == {1,1} and PMBSR_EL1.S == 0b1)
 #define PMCR_IMP GENMASK(31, 24) //implementer code
@@ -374,7 +374,7 @@
 #define PMCCFILTR_RLK BIT(22) // realm el1 filter bit
 #define PMCCFILTR_RLU BIT(21) // realm el0 filter bit
 #define PMCCFILTR_RLH BIT(20) // realm el2 filter bit
-#define PMCCFILTR_RESERVED GENMASK(19, 0)
+#define PMCCFILTR_RESERVED_3 GENMASK(19, 0)
 
 #define SYS_PMCEID0_EL0 sys_reg(3, 3, 9, 12, 6)
 #define PMCEID0_IDHI GENMASK(63, 32)
