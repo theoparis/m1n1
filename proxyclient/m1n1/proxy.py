@@ -594,6 +594,8 @@ class M1N1Proxy(Reloadable):
     P_HV_SET_TIME_STEALING = 0xc0a
     P_HV_PIN_CPU = 0xc0b
     P_HV_WRITE_HCR = 0xc0c
+    P_HV_MAP_VIRTIO = 0xc0d
+    P_VIRTIO_PUT_BUFFER = 0xc0e
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -618,6 +620,8 @@ class M1N1Proxy(Reloadable):
     P_DISPLAY_INIT = 0x1100
     P_DISPLAY_CONFIGURE = 0x1101
     P_DISPLAY_SHUTDOWN = 0x1102
+    P_DISPLAY_START_DCP = 0x1103
+    P_DISPLAY_IS_EXTERNAL = 0x1104
 
     P_DAPF_INIT_ALL = 0x1200
     P_DAPF_INIT = 0x1201
@@ -1025,6 +1029,10 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_PIN_CPU, cpu)
     def hv_write_hcr(self, hcr):
         return self.request(self.P_HV_WRITE_HCR, hcr)
+    def hv_map_virtio(self, base, config):
+        return self.request(self.P_HV_MAP_VIRTIO, base, config)
+    def virtio_put_buffer(self, base, qu, idx, length):
+        return self.request(self.P_VIRTIO_PUT_BUFFER, base, qu, idx, length)
 
     def fb_init(self):
         return self.request(self.P_FB_INIT)
@@ -1068,6 +1076,10 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_DISPLAY_CONFIGURE, cfg)
     def display_shutdown(self, mode):
         return self.request(self.P_DISPLAY_SHUTDOWN, mode)
+    def display_start_dcp(self):
+        return self.request(self.P_DISPLAY_START_DCP)
+    def display_is_external(self):
+        return self.request(self.P_DISPLAY_IS_EXTERNAL)
 
     def dapf_init_all(self):
         return self.request(self.P_DAPF_INIT_ALL)

@@ -455,6 +455,13 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_HV_MAP_VUART:
             hv_map_vuart(request->args[0], request->args[1], request->args[2]);
             break;
+        case P_HV_MAP_VIRTIO:
+            hv_map_virtio(request->args[0], (void *)request->args[1]);
+            break;
+        case P_VIRTIO_PUT_BUFFER:
+            virtio_put_buffer(request->args[0], request->args[1], request->args[2],
+                              request->args[3]);
+            break;
         case P_HV_TRACE_IRQ:
             reply->retval = hv_trace_irq(request->args[0], request->args[1], request->args[2],
                                          request->args[3]);
@@ -542,6 +549,12 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_DISPLAY_SHUTDOWN:
             display_shutdown(request->args[0]);
+            break;
+        case P_DISPLAY_START_DCP:
+            display_start_dcp();
+            break;
+        case P_DISPLAY_IS_EXTERNAL:
+            reply->retval = display_is_external;
             break;
 
         case P_DAPF_INIT_ALL:

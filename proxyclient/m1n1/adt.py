@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 import itertools, fnmatch, sys
 from construct import *
+import sys
 
 from .utils import AddrLookup, FourCC, SafeGreedyRange
 
@@ -307,12 +308,9 @@ def parse_prop(node, path, node_name, name, v, is_template=False):
                 break
             n = n._parent
         else:
-            ac, sc = node._parent.address_cells, node._parent.size_cells
-            at = Hex(Int64ul) if ac == 2 else Array(ac, Hex(Int32ul))
-            st = Hex(Int64ul) if sc == 2 else Array(sc, Hex(Int32ul))
-            t = SafeGreedyRange(Struct("addr" / at, "size" / st))
-            if len(v) % ((ac + sc) * 4):
-                t = None
+            rs = node._reg_struct
+            if len(v) % rs.sizeof() == 0:
+                t = SafeGreedyRange(rs)
 
     elif name == "ranges":
         try:
@@ -469,6 +467,20 @@ class ADTNode:
 
         del self._children[item]
 
+    def __contains__(self, item):
+        if isinstance(item, str):
+            while item.startswith("/"):
+                item = item[1:]
+            if "/" in item:
+                a, b = item.split("/", 1)
+                return b in self[a]
+            for c in self._children:
+                if c.name == item:
+                    return True
+            return False
+
+        return item in self._children
+
     def __getattr__(self, attr):
         attr = attr.replace("_", "-")
         attr = attr.replace("--", "_")
@@ -556,6 +568,14 @@ class ADTNode:
     def __iter__(self):
         return iter(self._children)
 
+    @property
+    def _reg_struct(self):
+        ac, sc = self._parent.address_cells, self._parent.size_cells
+        return Struct(
+            "addr" / Hex(Int64ul) if ac == 2 else Array(ac, Hex(Int32ul)),
+            "size" / Hex(Int64ul) if sc == 2 else Array(sc, Hex(Int32ul))
+        )
+
     def get_reg(self, idx):
         reg = self.reg[idx]
         addr = reg.addr
@@ -579,6 +599,23 @@ class ADTNode:
                     break
             node = node._parent
 
+        return addr
+
+    def to_bus_addr(self, addr):
+        node = self._parent
+
+        descend = []
+        while node is not None:
+            if "ranges" not in node._properties:
+                break
+            descend.append(node)
+            node = node._parent
+
+        for node in reversed(descend):
+            for r in node.ranges:
+                if r.parent_addr <= addr < (r.parent_addr + r.size):
+                    addr = addr - r.parent_addr + r.bus_addr
+                    break
         return addr
 
     def tostruct(self):
@@ -625,6 +662,19 @@ class ADTNode:
                 lookup.add(range(addr, addr + size), node.name + f"[{index}]")
 
         return lookup
+
+    def create_node(self, name):
+        while name.startswith("/"):
+            name = name[1:]
+        if "/" in name:
+            a, b = name.split("/", 1)
+            return self[a].create_node(b)
+
+        node = ADTNode(path=self._path + "/", parent=self)
+        node.name = name
+        node._types["reg"] = (SafeGreedyRange(node._reg_struct), False)
+        self[name] = node
+        return node
 
 def load_adt(data):
     return ADTNode(ADTNodeStruct.parse(data))

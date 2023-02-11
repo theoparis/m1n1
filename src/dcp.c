@@ -9,25 +9,39 @@
 
 dcp_dev_t *dcp_init(const char *dcp_path, const char *dcp_dart_path, const char *disp_dart_path)
 {
+    u32 sid;
+
+    int node = adt_path_offset(adt, "/arm-io/dart-dcp/mapper-dcp");
+    if (node < 0) {
+        printf("dcp: mapper-dcp not found!\n");
+        return NULL;
+    }
+    if (ADT_GETPROP(adt, node, "reg", &sid) < 0) {
+        printf("dcp: failed to read dart stream ID!\n");
+        return NULL;
+    }
+
     dcp_dev_t *dcp = malloc(sizeof(dcp_dev_t));
     if (!dcp)
         return NULL;
 
-    dcp->dart_dcp = dart_init_adt(dcp_dart_path, 0, 0, true);
+    dcp->dart_dcp = dart_init_adt(dcp_dart_path, 0, sid, true);
     if (!dcp->dart_dcp) {
         printf("dcp: failed to initialize DCP DART\n");
         goto out_free;
     }
-    dart_setup_pt_region(dcp->dart_dcp, dcp_dart_path, 0);
+    u64 vm_base = dart_vm_base(dcp->dart_dcp);
+    dart_setup_pt_region(dcp->dart_dcp, dcp_dart_path, sid, vm_base);
 
     dcp->dart_disp = dart_init_adt(disp_dart_path, 0, 0, true);
     if (!dcp->dart_disp) {
         printf("dcp: failed to initialize DISP DART\n");
         goto out_dart_dcp;
     }
-    dart_setup_pt_region(dcp->dart_disp, disp_dart_path, 0);
+    // set disp0's page tables at dart-dcp's vm-base
+    dart_setup_pt_region(dcp->dart_disp, disp_dart_path, 0, vm_base);
 
-    dcp->iovad_dcp = iovad_init(0x10000000, 0x20000000);
+    dcp->iovad_dcp = iovad_init(vm_base + 0x10000000, vm_base + 0x20000000);
 
     dcp->asc = asc_init(dcp_path);
     if (!dcp->asc) {

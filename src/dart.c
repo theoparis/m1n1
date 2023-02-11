@@ -116,6 +116,7 @@ struct dart_dev {
     u8 device;
     enum dart_type_t type;
     const struct dart_params *params;
+    u64 vm_base;
 
     u64 *l1[DART_MAX_TTBR_COUNT];
 };
@@ -320,6 +321,8 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
                    dart->l1[i]);
         }
     }
+    if (ADT_GETPROP(adt, node, "vm-base", &dart->vm_base) < 0)
+        dart->vm_base = 0;
 
     return dart;
 }
@@ -391,33 +394,35 @@ dart_dev_t *dart_init_fdt(void *dt, u32 phandle, int device, bool keep_pts)
     return dart;
 }
 
-int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device)
+int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device, u64 vm_base)
 {
-    /* only device 0 of dart-dcp and dart-disp0 are of interest */
-    if (device != 0)
-        return -1;
-
     int node = adt_path_offset(adt, path);
     if (node < 0) {
         printf("dart: Error getting DART node %s\n", path);
         return -1;
     }
+    char pt_region_str[24];
+    snprintf(pt_region_str, sizeof(pt_region_str), "pt-region-%d", device);
+    char l2_tt_str[24];
+    snprintf(l2_tt_str, sizeof(l2_tt_str), "l2-tt-%d", device);
 
-    const struct adt_property *pt_region = adt_get_property(adt, node, "pt-region-0");
+    const struct adt_property *pt_region = adt_get_property(adt, node, pt_region_str);
     if (pt_region && pt_region->size == 16) {
         u64 region[2];
         memcpy(region, pt_region->value, sizeof(region));
         u64 tbl_count = (region[1] - region[0]) / SZ_16K;
         if (tbl_count > 64) {
-            printf("dart: dart %s ignoring large pt-region-0, %lu L2 tables\n", path, tbl_count);
+            printf("dart: dart %s ignoring large %s, %lu L2 tables\n", path, pt_region_str,
+                   tbl_count);
             return -1;
         }
         /* first index is the l1 table, cap at 2 or else macOS hates it */
         tbl_count = min(2, tbl_count - 1);
         u64 l2_start = region[0] + SZ_16K;
+        u64 vmstart = vm_base >> (14 + 11);
         for (u64 index = 0; index < tbl_count; index++) {
-            int ttbr = index >> 11;
-            int idx = index & 0x7ff;
+            int ttbr = (vmstart + index) >> 11;
+            int idx = (vmstart + index) & 0x7ff;
             u64 l2tbl = l2_start + index * SZ_16K;
 
             if (dart->l1[ttbr][idx] & DART_PTE_VALID) {
@@ -436,10 +441,10 @@ int dart_setup_pt_region(dart_dev_t *dart, const char *path, int device)
             dart->l1[ttbr][idx] = offset | DART_PTE_VALID;
         }
 
-        u64 l2_tt_0[2] = {region[0], tbl_count};
-        int ret = adt_setprop(adt, node, "l2-tt-0", &l2_tt_0, sizeof(l2_tt_0));
+        u64 l2_tt[2] = {region[0], tbl_count};
+        int ret = adt_setprop(adt, node, l2_tt_str, &l2_tt, sizeof(l2_tt));
         if (ret < 0) {
-            printf("dart: failed to update '%s/l2-tt-0'\n", path);
+            printf("dart: failed to update '%s/%s'\n", path, l2_tt_str);
         }
 
         dart->params->tlb_invalidate(dart);
@@ -582,6 +587,16 @@ static void *dart_translate_internal(dart_dev_t *dart, uintptr_t iova, int silen
     u32 ttbr = (iova >> 36) & 0x3;
     u32 l1_index = (iova >> 25) & 0x7ff;
 
+    if ((int)ttbr >= dart->params->ttbr_count) {
+        printf("dart[%lx %u]: ttbr out of range: %d\n", dart->regs, dart->device, ttbr);
+        return NULL;
+    }
+
+    if (!dart->l1[ttbr]) {
+        printf("dart[%lx %u]: l1[%u] is not set\n", dart->regs, dart->device, ttbr);
+        return NULL;
+    }
+
     if (!(dart->l1[ttbr][l1_index] & DART_PTE_VALID) && !silent) {
         printf("dart[%lx %u]: l1 translation failure %x %lx\n", dart->regs, dart->device, l1_index,
                iova);
@@ -642,7 +657,7 @@ u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len)
     if (start < 0 || start % SZ_16K)
         return -1;
 
-    uintptr_t end = 1LLU << 32;
+    uintptr_t end = 1LLU << 36;
     uintptr_t iova = start;
 
     while (iova + len <= end) {
@@ -691,4 +706,9 @@ void dart_shutdown(dart_dev_t *dart)
         if (is_heap(dart->l1[i]))
             free(dart->l1[i]);
     free(dart);
+}
+
+u64 dart_vm_base(dart_dev_t *dart)
+{
+    return dart->vm_base;
 }
