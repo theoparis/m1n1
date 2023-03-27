@@ -45,6 +45,12 @@ class WorkCommandInitBM(ConstructClass):
         "stamp_value" / Hex(Int32ul),  # 0x100
     )
 
+class Flag(ConstructValueClass):
+    subcon = Hex(Int32ul)
+
+    def __init__(self):
+        self.value = 0
+
 class LinkedListHead(ConstructClass):
     subcon = Struct(
         "prev" / Int64ul,
@@ -67,7 +73,7 @@ class EventControl(ConstructClass):
     subcon = Struct(
         "event_count_addr" / Int64ul,
         "event_count" / ROPointer(this.event_count_addr, Int32ul),
-        "generation" / Int32ul,
+        "submission_id" / Int32ul,
         "cur_count" / Int32ul,
         "unk_10" / Int32ul,
         "unk_14" / Int32ul,
@@ -81,9 +87,9 @@ class EventControl(ConstructClass):
         "has_cp" / Int32ul,
         "pstamp_cp" / Array(4, Int64ul),
         "in_list" / Int32ul,
-        Ver("G >= G14", "unk_98_g14_0" / HexDump(Bytes(0x14))),
+        Ver("G >= G14 && V < V13_0B4", "unk_98_g14_0" / HexDump(Bytes(0x14))),
         "list_head" / LinkedListHead,
-        Ver("G >= G14", "unk_a8_g14_0" / Padding(4)),
+        Ver("G >= G14 && V < V13_0B4", "unk_a8_g14_0" / ZPadding(4)),
         Ver("V >= V13_0B4", "unk_buf" / EventControlUnkBuf),
     )
 
@@ -132,19 +138,36 @@ class WorkCommandCP(ConstructClass):
     subcon = Struct(
         "addr" / Tell,
         "magic" / Const(0x3, Hex(Int32ul)),
+        Ver("V >= V13_0B4", "counter" / Int64ul),
         "unk_4" / Hex(Int32ul),
         "context_id" / Hex(Int32ul),
         "event_control_addr" / Hex(Int64ul),
         "event_control" / ROPointer(this.event_control_addr, EventControl),
-
-        # This struct embeeds some data that the Control List has pointers back to, but doesn't
-        # seem to be actually part of this struct
-        Padding(0x1e8 - 0x14),
-
-        # offset 000001e8
+        "unk_buf" / HexDump(Bytes(0x54)),
+        "compute_info" / ComputeInfo,
+        "unk_b8" / HexDump(Bytes(0x1e8 - 0xcc)),
         "microsequence_ptr" / Hex(Int64ul),
         "microsequence_size" / Hex(Int32ul),
         "microsequence" / ROPointer(this.microsequence_ptr, MicroSequence),
+        "compute_info2" / ComputeInfo2,
+        "encoder_params" / EncoderParams,
+        "job_meta" / JobMeta,
+        "ts1" / TimeStamp,
+        "ts2" / TimeStamp,
+        "ts3" / TimeStamp,
+        "unk_2c0" / Int32ul,
+        "unk_2c4" / Int32ul,
+        "unk_2c8" / Int32ul,
+        "unk_2cc" / Int32ul,
+        "client_sequence" / Int8ul,
+        "pad_2d1" / Default(HexDump(Bytes(0x3)), bytes(0x3)),
+        "unk_2d4" / Int32ul,
+        "unk_2d8" / Int8ul,
+        Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
+        Ver("V >= V13_0B4", "unk_2e1" / Default(HexDump(Bytes(0x1c)), bytes(0x1c))),
+        Ver("V >= V13_0B4", "unk_flag" / Flag),
+        Ver("V >= V13_0B4", "unk_pad" / Default(HexDump(Bytes(0x10)), bytes(0x10))),
+        "pad_2d9" / Default(HexDump(Bytes(0x7)), bytes(0x7)),
     )
 
 class WorkCommand0_UnkBuf(ConstructValueClass):
@@ -165,12 +188,6 @@ class WorkCommand1_UnkBuf2(ConstructClass):
         "unk_8" / Int64ul,
         "unk_10" / Int64ul,
     )
-
-class Flag(ConstructValueClass):
-    subcon = Hex(Int32ul)
-
-    def __init__(self):
-        self.value = 0
 
 class WorkCommand3D(ConstructClass):
     """
@@ -242,12 +259,12 @@ class WorkCommand3D(ConstructClass):
         "unk_914" / Int32ul,
         "unk_918" / Int64ul,
         "unk_920" / Int32ul,
-        "unk_924" / Int32ul,
+        "client_sequence" / Int8ul,
+        "pad_925" / Default(HexDump(Bytes(0x3)), bytes(0x3)),
         Ver("V >= V13_0B4", "unk_928_0" / Int32ul),
         Ver("V >= V13_0B4", "unk_928_4" / Int8ul),
-        Ver("V >= V13_0B4", "ts_flag" / TsFlag),
-        Ver("V >= V13_0B4", "unk_5e6" / Default(Int16ul, 0)),
-        Ver("V >= V13_0B4", "unk_5e8" / Default(HexDump(Bytes(0x20)), bytes(0x20))),
+        Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
+        Ver("V >= V13_0B4", "unk_928_d" / Default(HexDump(Bytes(0x1b)), bytes(0x1b))),
         "pad_928" / Default(HexDump(Bytes(0x18)), bytes(0x18)),
     )
 
@@ -323,15 +340,79 @@ class WorkCommandTA(ConstructClass):
         "unk_5c8" / Int32ul,
         "unk_5cc" / Int32ul,
         "unk_5d0" / Int32ul,
-        "unk_5d4" / Int8ul,
+        "client_sequence" / Int8ul,
         "pad_5d5" / Default(HexDump(Bytes(0x3)), bytes(0x3)),
-        Ver("V >= V13_0B4", "unk_5e0" / Int32ul),
-        Ver("V >= V13_0B4", "unk_5e4" / Int8ul),
-        Ver("V >= V13_0B4", "ts_flag" / TsFlag),
-        Ver("V >= V13_0B4", "unk_5e6" / Default(Int16ul, 0)),
-        Ver("V >= V13_0B4", "unk_5e8" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
+        Ver("V >= V13_0B4", "unk_5d8_0" / Int32ul),
+        Ver("V >= V13_0B4", "unk_5d8_4" / Int8ul),
+        Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
+        Ver("V >= V13_0B4", "unk_5d8_d" / Default(HexDump(Bytes(0x13)), bytes(0x13))),
         "pad_5d8" / Default(HexDump(Bytes(0x8)), bytes(0x8)),
         Ver("V >= V13_0B4", "pad_5e0" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
+    )
+
+class WorkCommandBlit(ConstructClass):
+    subcon = Struct(
+        "addr" / Tell,
+        "magic" / Const(0x2, Int32ul),
+        Ver("V >= V13_0B4", "counter" / Int64ul),
+        "context_id" / Int32ul,
+        "event_control_addr" / Hex(Int64ul),
+        "event_control" / ROPointer(this.event_control_addr, EventControl),
+        "unk_10" / Hex(Int32ul),
+        "unk_14" / Int32ul,
+        "unk_18" / Int64ul,
+        "unk_20" / Int64ul,
+        "unk_28" / Int64ul,
+        "unk_30" / Int64ul,
+        "unk_38" / Int64ul,
+        "unk_40" / Int64ul,
+        "unk_48" / HexDump(Bytes(0xa0)),
+        "unkptr_e8" / Int64ul,
+        "unk_f0" / Int64ul,
+        "unkptr_f8" / Int64ul,
+        "pipeline_base" / Int64ul,
+        "unk_108" / Int64ul,
+        "unk_110" / HexDump(Bytes(0x248)),
+        "unk_358" / Int32ul,
+        "unk_35c" / Int32ul,
+        "unk_360" / Int32ul,
+        "unk_364" / Int32ul,
+        "unk_368" / Float32l,
+        "unk_36c" / Float32l,
+        "unk_370" / Int64ul,
+        "unk_378" / Int64ul,
+        "unk_380" / Int64ul,
+        "unk_388" / Int64ul,
+        "unk_390" / HexDump(Bytes(0xd8)),
+        "unk_468" / Int64ul,
+        "unk_470" / Int64ul,
+        "unk_478" / Int32ul,
+        "unk_47c" / Int32ul,
+        "unk_480" / Int64ul,
+        "unk_488" / Int64ul,
+        "microsequence_ptr" / Hex(Int64ul),
+        "microsequence_size" / Hex(Int32ul),
+        "microsequence" / ROPointer(this.microsequence_ptr, MicroSequence),
+        "unkptr_49c" / HexDump(Bytes(0x114)),
+        "job_meta" / JobMeta,
+        "unk_5d8" / Int32ul,
+        "unk_stamp_ptr" / Int64ul,
+        "unk_stamp_val" / Int32ul,
+        "unk_5ec" / Int32ul,
+        "encoder_params" / EncoderParams,
+        "unk_618" / Int32ul,
+        "ts1" / TimeStamp,
+        "ts2" / TimeStamp,
+        "ts3" / TimeStamp,
+        "unk_634" / Int32ul,
+        "unk_638" / Int32ul,
+        "unk_63c" / Int32ul,
+        "unk_640" / Int32ul,
+        "client_sequence" / Int8ul,
+        "pad_645" / Default(HexDump(Bytes(0x3)), bytes(0x3)),
+        "unk_648" / Int32ul,
+        "unk_64c" / Int8ul,
+        "pad_64d" / Default(HexDump(Bytes(0x7)), bytes(0x7)),
     )
 
 class UnknownWorkCommand(ConstructClass):
@@ -352,6 +433,7 @@ class CmdBufWork(ConstructClass):
         "cmd" / Switch(this.cmdid, {
             0: WorkCommandTA,
             1: WorkCommand3D,
+            2: WorkCommandBlit,
             3: WorkCommandCP,
             4: WorkCommandBarrier,
             6: WorkCommandInitBM,
@@ -455,9 +537,11 @@ class CommandQueueInfo(ConstructClass):
         "unk_94" / Int32ul,
         "pending" / Int32ul,
         "unk_9c" / Int32ul,
+        Ver("V >= V13_2", "unk_a0_0" / Int32ul),
         "gpu_context_addr" / Hex(Int64ul), # GPU managed context, shared between 3D and TA. Passed to DC_DestroyContext
         "gpu_context" / ROPointer(this.gpu_context_addr, GPUContextData),
-        "unk_a8" / Int64ul
+        "unk_a8" / Int64ul,
+        Ver("V >= V13_2", "unk_b0" / Int32ul),
         # End of struct
     )
 
@@ -479,8 +563,10 @@ class CommandQueueInfo(ConstructClass):
         self.unk_94 = 0
         self.pending = 0
         self.unk_9c = 0
+        self.unk_a0_0 = 0
         self.set_prio(0)
         self.unk_a8 = 0
+        self.unk_b0 = 0
 
     def set_prio(self, p):
         if p == 0:

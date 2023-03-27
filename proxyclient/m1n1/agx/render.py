@@ -205,7 +205,7 @@ class GPURenderer:
         self.event_control.event_count.val = 0
         self.event_control.event_count.push()
 
-        self.event_control.generation = 0
+        self.event_control.submission_id = 0
         self.event_control.cur_count = 0
         self.event_control.unk_10 = 0x50
         self.event_control.push()
@@ -216,6 +216,11 @@ class GPURenderer:
         self.ev_3d = ev_3d = self.agx.event_mgr.allocate_event()
 
         self.work = []
+
+        self.ev_idx = 0
+
+        self.mshook_ta = None
+        self.mshook_3d = None
 
     def submit(self, cmdbuf, wait_for=None):
         nclusters = 8
@@ -466,11 +471,11 @@ class GPURenderer:
         wc_3d.unk_914 = 0
         wc_3d.unk_918 = 0
         wc_3d.unk_920 = 0
-        wc_3d.unk_924 = 1
+        wc_3d.client_sequence = 1
         # Ventura
         wc_3d.unk_928_0 = 0
         wc_3d.unk_928_4 = 0
-        wc_3d.ts_flag = TsFlag()
+        wc_3d.unk_ts = TimeStamp()
 
         # cmdbuf.ds_flags
         # 0 - no depth
@@ -634,10 +639,10 @@ class GPURenderer:
             wc_3d.struct_7.stamp2 = self.stamp_3d2
             wc_3d.struct_7.stamp_value = self.stamp_value_3d
             wc_3d.struct_7.ev_3d = ev_3d.id
-            wc_3d.struct_7.evctl_index = 0x0
+            wc_3d.struct_7.evctl_index = self.ev_idx
             wc_3d.struct_7.unk_24 = 1
             wc_3d.struct_7.uuid = uuid_3d
-            wc_3d.struct_7.prev_stamp_value = self.prev_stamp_value_3d >> 8
+            wc_3d.struct_7.queue_cmd_count = 0
             wc_3d.struct_7.unk_30 = 0x0
 
         wc_3d.set_addr() # Update inner structure addresses
@@ -648,6 +653,8 @@ class GPURenderer:
         #print(" s7", hex(wc_3d.struct_7._addr))
 
         ms = GPUMicroSequence(agx)
+        if self.mshook_3d:
+            self.mshook_3d(self, work, ms)
 
         start_3d = Start3DCmd()
         start_3d.struct1 = wc_3d.struct_1 # 0x44 bytes!
@@ -661,10 +668,10 @@ class GPURenderer:
         start_3d.workitem_ptr = wc_3d._addr
         start_3d.context_id = self.ctx_id
         start_3d.unk_50 = 0x1
-        start_3d.event_generation = self.event_control.generation
+        start_3d.submission_id = self.event_control.submission_id
         start_3d.buffer_mgr_slot = self.buffer_mgr_slot
         start_3d.unk_5c = 0x0
-        start_3d.prev_stamp_value = self.prev_stamp_value_3d >> 8
+        start_3d.queue_cmd_count = self.prev_stamp_value_3d >> 8
         start_3d.unk_68 = 0x0
         start_3d.unk_buf_ptr = wc_3d.unk_758._addr
         start_3d.unk_buf2_ptr = wc_3d.unk_buf2._addr
@@ -703,7 +710,7 @@ class GPURenderer:
         ts1.cmdqueue_ptr = self.wq_3d.info._addr
         ts1.unk_24 = 0x0
         if Ver.check("V >= V13_0B4"):
-            ts1.unkptr_2c_0 = wc_3d.ts_flag._addr
+            ts1.unk_ts_addr = wc_3d.unk_ts._addr
         ts1.uuid = uuid_3d
         ts1.unk_30_padding = 0x0
         ms.append(ts1)
@@ -720,7 +727,7 @@ class GPURenderer:
         ts2.cmdqueue_ptr = self.wq_3d.info._addr
         ts2.unk_24 = 0x0
         if Ver.check("V >= V13_0B4"):
-            ts2.unkptr_2c_0 = wc_3d.ts_flag._addr
+            ts2.unk_ts_addr = wc_3d.unk_ts._addr
         ts2.uuid = uuid_3d
         ts2.unk_30_padding = 0x0
         ms.append(ts2)
@@ -820,11 +827,11 @@ class GPURenderer:
         wc_ta.unk_5c8 = 0
         wc_ta.unk_5cc = 0
         wc_ta.unk_5d0 = 0
-        wc_ta.unk_5d4 = 1 #0x27 #1
+        wc_ta.client_sequence = 1
         # Ventura
-        wc_ta.unk_5e0 = 0
-        wc_ta.unk_5e4 = 0
-        wc_ta.ts_flag = TsFlag()
+        wc_ta.unk_5d8_0 = 0
+        wc_ta.unk_5d8_4 = 0
+        wc_ta.unk_ts = TimeStamp()
 
         # Structures embedded in WorkCommandTA
         if True:
@@ -896,16 +903,18 @@ class GPURenderer:
             wc_ta.struct_3.stamp2 = self.stamp_ta2
             wc_ta.struct_3.stamp_value = self.stamp_value_ta
             wc_ta.struct_3.ev_ta = ev_ta.id
-            wc_ta.struct_3.evctl_index = 0
+            wc_ta.struct_3.evctl_index = self.ev_idx
             wc_ta.struct_3.unk_584 = 0x0 # 1 for boot stuff?
             wc_ta.struct_3.uuid2 = uuid_ta
-            wc_ta.struct_3.prev_stamp_value = self.prev_stamp_value_ta >> 8
+            wc_ta.struct_3.queue_cmd_count = 0
             wc_ta.struct_3.unk_590 = 0 # sometimes 1?
 
         wc_ta.set_addr() # Update inner structure addresses
         #print("wc_ta", wc_ta)
 
         ms = GPUMicroSequence(agx)
+        if self.mshook_ta:
+            self.mshook_ta(self, work, ms)
 
         start_ta = StartTACmd()
         start_ta.tiling_params = wc_ta.tiling_params
@@ -916,7 +925,7 @@ class GPURenderer:
         start_ta.cmdqueue_ptr = self.wq_ta.info._addr
         start_ta.context_id = self.ctx_id
         start_ta.unk_38 = 1
-        start_ta.event_generation = self.event_control.generation
+        start_ta.submission_id = self.event_control.submission_id
         start_ta.buffer_mgr_slot = self.buffer_mgr_slot
         start_ta.unk_48 = 0#1 #0
         start_ta.unk_50 = 0
@@ -953,7 +962,7 @@ class GPURenderer:
         ts1.cmdqueue_ptr = self.wq_ta.info._addr
         ts1.unk_24 = 0x0
         if Ver.check("V >= V13_0B4"):
-            ts1.unkptr_2c_0 = wc_ta.ts_flag._addr
+            ts1.unk_ts_addr = wc_ta.unk_ts._addr
         ts1.uuid = uuid_ta
         ts1.unk_30_padding = 0x0
         ms.append(ts1)
@@ -970,7 +979,7 @@ class GPURenderer:
         ts2.cmdqueue_ptr = self.wq_ta.info._addr
         ts2.unk_24 = 0x0
         if Ver.check("V >= V13_0B4"):
-            ts2.unkptr_2c_0 = wc_ta.ts_flag._addr
+            ts2.unk_ts_addr = wc_ta.unk_ts._addr
         ts2.uuid = uuid_ta
         ts2.unk_30_padding = 0x0
         ms.append(ts2)
@@ -1015,6 +1024,9 @@ class GPURenderer:
         self.wq_ta.submit(wc_ta)
 
         self.agx.log("Submit done")
+
+        #self.ev_idx = (self.ev_idx + 1) % 4
+
         return work
 
     def run(self):

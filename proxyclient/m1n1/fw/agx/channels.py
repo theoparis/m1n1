@@ -8,6 +8,11 @@ from .cmdqueue import *
 
 __all__ = ["channelNames", "channelRings", "DeviceControlMsg", "EventMsg", "StatsMsg"]
 
+if Ver.check("G >= G14 && V >= V13_2"):
+    RunCmdQueueSize = 0x40
+else:
+    RunCmdQueueSize = 0x30
+
 class RunCmdQueueMsg(ConstructClass):
     subcon = Struct (
         "queue_type" / Default(Int32ul, 0),
@@ -17,6 +22,7 @@ class RunCmdQueueMsg(ConstructClass):
         "event_number" / Default(Int32ul, 0),
         "new_queue" / Default(Int32ul, 0),
         "data" / HexDump(Default(Bytes(0x18), bytes(0x18))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
     TYPES = {
@@ -45,7 +51,8 @@ class DC_DestroyContext(ConstructClass):
         "unk_14" / Hex(Int32ul),
         "unk_18" / Hex(Int32ul),
         "context_addr" / Hex(Int64ul),
-        "rest" / HexDump(Default(Bytes(0xc), bytes(0xc)))
+        "rest" / HexDump(Default(Bytes(0xc), bytes(0xc))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Write32(ConstructClass):
@@ -57,7 +64,8 @@ class DC_Write32(ConstructClass):
         "unk_14" / Int32ul,
         "unk_18" / Int32ul,
         "unk_1c" / Int32ul,
-        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10)))
+        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Write32B(ConstructClass):
@@ -69,13 +77,15 @@ class DC_Write32B(ConstructClass):
         "unk_14" / Int32ul,
         "unk_18" / Int32ul,
         "unk_1c" / Int32ul,
-        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10)))
+        "rest" / HexDump(Default(Bytes(0x10), bytes(0x10))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Init(ConstructClass):
     subcon =  Struct (
         "msg_type" / Const(0x19, Int32ul),
-        "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c)))
+        "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_09(ConstructClass):
@@ -84,13 +94,15 @@ class DC_09(ConstructClass):
         "unk_4" / Int64ul,
         "unkptr_c" / Int64ul,
         "unk_14" / Int64ul,
-        "data" /  HexDump(Default(Bytes(0x14), bytes(0x14)))
+        "data" /  HexDump(Default(Bytes(0x14), bytes(0x14))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Any(ConstructClass):
     subcon =  Struct (
         "msg_type" / Int32ul,
-        "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c)))
+        "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_1e(ConstructClass):
@@ -98,22 +110,30 @@ class DC_1e(ConstructClass):
         "msg_type" / Const(0x1e, Int32ul),
         "unk_4" / Int64ul,
         "unk_c" / Int64ul,
-        "data" /  HexDump(Default(Bytes(0x1c), bytes(0x1c)))
+        "data" /  HexDump(Default(Bytes(0x1c), bytes(0x1c))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_UpdateIdleTS(ConstructClass):
     subcon = Struct (
         "msg_type" / Const(0x23, Int32ul),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class UnknownMsg(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Int32ul),
         "data" / HexDump(Bytes(0x2c)),
+        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
     )
 
-DeviceControlMsg = FixedSized(0x30, Select(
+if Ver.check("G >= G14 && V >= V13_2"):
+    DeviceControlSize = 0x40
+else:
+    DeviceControlSize = 0x30
+
+DeviceControlMsg = FixedSized(DeviceControlSize, Select(
     DC_DestroyContext,
     DC_Init,
     DC_UpdateIdleTS,
@@ -128,6 +148,7 @@ class StatsMsg_Power(ConstructClass):
         ZPadding(0x18), # ??? why the hole? never written...
         "power" / Hex(Int64ul),
         ZPadding(0xc), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
 
     def __str__(self):
@@ -138,6 +159,7 @@ class StatsMsg_PowerOn(ConstructClass):
         "msg_type" / Hex(Const(0x02, Int32ul)),
         "power_off_ticks" / Dec(Int64ul),
         ZPadding(0x24), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
     def __str__(self):
         t = self.power_off_ticks / 24000000
@@ -148,6 +170,7 @@ class StatsMsg_PowerOff(ConstructClass):
         "msg_type" / Hex(Const(0x03, Int32ul)),
         "power_on_ticks" / Dec(Int64ul),
         ZPadding(0x24), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
     def __str__(self):
         t = self.power_on_ticks / 24000000
@@ -162,6 +185,7 @@ class StatsMsg_Util(ConstructClass):
         "util3" / Dec(Int32ul),
         "util4" / Dec(Int32ul),
         ZPadding(0x14), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
     def __str__(self):
         return f"Utilization: {self.util1:>3d}% {self.util2:>3d}% {self.util3:>3d}% {self.util4:>3d}%"
@@ -175,6 +199,7 @@ class StatsMsg_AvgPower(ConstructClass):
         "unk4" / Hex(Int32ul),
         "avg_power" / Dec(Int32ul),
         ZPadding(0x14), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
 
     def __str__(self):
@@ -189,6 +214,7 @@ class StatsMsg_Temp(ConstructClass):
         "tmin" / Hex(Int32ul),
         "tmax" / Hex(Int32ul),
         ZPadding(0x14), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
 
     def __str__(self):
@@ -207,6 +233,7 @@ class StatsMsg_PowerState(ConstructClass):
         "unk4" / Dec(Int32ul),
         "unk5" / Dec(Int32ul),
         ZPadding(4), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
 
     def __str__(self):
@@ -221,6 +248,7 @@ class StatsMsg_FWBusy(ConstructClass):
         "timestamp" / Hex(Int64ul),
         "flag" / Int32ul,
         ZPadding(0x20), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
 
     def __str__(self):
@@ -235,6 +263,7 @@ class StatsMsg_PState(ConstructClass):
         "ps_max" / Dec(Int32ul),
         "unk3" / Dec(Int32ul),
         ZPadding(0x14), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
     def __str__(self):
         return f"PState: {self.ps_min:d}..{self.ps_max:d} ({self.unk1:d}/{self.unk3:d})"
@@ -249,12 +278,18 @@ class StatsMsg_TempSensor(ConstructClass):
         "tmin" / Dec(Int32ul),
         "tmax" / Dec(Int32ul),
         ZPadding(0x14), # Confirmed padding
+        Ver("V >= V13_0B4", ZPadding(0x10)),
     )
     def __str__(self):
         temp = self.raw_value / float(self.scale) / 64.0
         return f"TempSensor: #{self.sensor_id:d} {temp:.2f}°C s={self.scale:d} tmin={self.tmin:d} tmax={self.tmax:d}"
 
-StatsMsg = FixedSized(0x30, Select(
+if Ver.check("V < V13_0B4"):
+    StatsSize = 0x30
+else:
+    StatsSize = 0x40
+
+StatsMsg = FixedSized(StatsSize, Select(
     StatsMsg_Power,
     StatsMsg_PowerOn,
     StatsMsg_PowerOff,
@@ -384,8 +419,8 @@ channelNames = [
 CHANNEL_COUNT = len(channelNames) - 1
 
 channelRings = (
-    [[(RunCmdQueueMsg, 0x30, 0x100)]] * 12 + [
-        [(DeviceControlMsg, 0x30, 0x100)],
+    [[(RunCmdQueueMsg, RunCmdQueueSize, 0x100)]] * 12 + [
+        [(DeviceControlMsg, DeviceControlSize, 0x100)],
         [(EventMsg, 0x38, 0x100)],
         [
             (FWLogMsg, 0xd8, 0x100),                # unk 0
@@ -396,7 +431,7 @@ channelRings = (
             (FWLogMsg, 0xd8, 0x100),                # unk 5
         ],
         [(KTraceMsg, 0x38, 0x200)],
-        [(HexDump(Bytes(0x60)), 0x60, 0x100)],
+        [(StatsMsg, StatsSize, 0x100)],
         [(FWCtlMsg, 0x14, 0x100)],
     ]
 )
@@ -448,7 +483,7 @@ class Channel(Reloadable):
         assert index < count
         addr = self.rb_base[ring] + index * size
         stream = self.uat.iostream(0, addr)
-        stream.meta_fn = meta_fn
+        stream.meta_fn = lambda a, b: meta_fn(0, a, b)
         return msgcls.parse_stream(stream)
 
     def clear_message(self, ring, index):

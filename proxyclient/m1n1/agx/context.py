@@ -32,11 +32,11 @@ class GPUContext:
 
         # 32K VA pages since buffer manager needs that
         self.uobj = GPUAllocator(agx, "Userspace", 0x1600000000, 0x100000000, ctx=None,
-                                 guard_pages=16,
+                                 guard_pages=1,
                                  va_block=32768, nG=1, AP=0, PXN=1, UXN=1)
 
         self.gobj = GPUAllocator(agx, "GEM", 0x1500000000, 0x100000000, ctx=None,
-                                 guard_pages=16, nG=1, AP=0, PXN=1, UXN=1)
+                                 guard_pages=1, nG=1, AP=0, PXN=1, UXN=1)
 
         self.pipeline_base = 0x1100000000
         self.pipeline_size = 1 << 32
@@ -154,7 +154,10 @@ class GPUMicroSequence:
         self.agx = agx
         self.off = 0
         self.ops = []
-        self.obj = None
+        self.obj = self.agx.kobj.new_buf(4096, "GPUMicroSequence", track=True)
+
+    def cur_addr(self):
+        return self.obj._addr + self.off
 
     def append(self, op):
         off = self.off
@@ -165,8 +168,7 @@ class GPUMicroSequence:
     def finalize(self):
         self.ops.append(EndCmd())
         self.size = sum(i.sizeof() for i in self.ops)
-        self.obj = self.agx.kobj.new_buf(self.size, "GPUMicroSequence", track=False)
-        self.obj.val = b"".join(i.build() for i in self.ops)
+        self.obj.val = b"".join(i.build() for i in self.ops) + bytes(4096 - self.size)
         self.obj.push()
         return self.obj
 
