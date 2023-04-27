@@ -112,6 +112,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_REBOOT:
             reboot();
             break;
+        case P_SLEEP:
+            cpu_sleep(request->args[0]);
+            break;
 
         case P_WRITE64:
             exc_guard = GUARD_SKIP;
@@ -324,6 +327,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
         case P_SMP_START_SECONDARIES:
             smp_start_secondaries();
             break;
+        case P_SMP_STOP_SECONDARIES:
+            smp_stop_secondaries(request->args[0]);
+            break;
         case P_SMP_CALL:
             smp_call4(request->args[0], (void *)request->args[1], request->args[2],
                       request->args[3], request->args[4], request->args[5]);
@@ -338,6 +344,9 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_SMP_SET_WFE_MODE:
             smp_set_wfe_mode(request->args[0]);
+            break;
+        case P_SMP_IS_ALIVE:
+            reply->retval = smp_is_alive(request->args[0]);
             break;
 
         case P_HEAPBLOCK_ALLOC:
@@ -483,6 +492,12 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_HV_WRITE_HCR:
             hv_write_hcr(request->args[0]);
+            break;
+        case P_HV_EXIT_CPU:
+            hv_exit_cpu(request->args[0]);
+            break;
+        case P_HV_ADD_TIME:
+            hv_add_time(request->args[0]);
             break;
 
         case P_FB_INIT:

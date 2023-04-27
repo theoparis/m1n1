@@ -23,6 +23,7 @@ typedef enum {
     P_GET_SIMD_STATE,
     P_PUT_SIMD_STATE,
     P_REBOOT,
+    P_SLEEP,
 
     P_WRITE64 = 0x100, // Generic register functions
     P_WRITE32,
@@ -83,6 +84,8 @@ typedef enum {
     P_SMP_CALL_SYNC,
     P_SMP_WAIT,
     P_SMP_SET_WFE_MODE,
+    P_SMP_IS_ALIVE,
+    P_SMP_STOP_SECONDARIES,
 
     P_HEAPBLOCK_ALLOC = 0x600, // Heap and memory management ops
     P_MALLOC,
@@ -132,6 +135,8 @@ typedef enum {
     P_HV_WRITE_HCR,
     P_HV_MAP_VIRTIO,
     P_VIRTIO_PUT_BUFFER,
+    P_HV_EXIT_CPU,
+    P_HV_ADD_TIME,
 
     P_FB_INIT = 0xd00,
     P_FB_SHUTDOWN,

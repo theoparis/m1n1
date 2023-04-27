@@ -304,8 +304,8 @@ bool nvme_init(void)
 
     u32 cg;
     if (ADT_GETPROP(adt, node, "clock-gates", &cg) < 0) {
-        printf("nvme: Error getting NVMe clock-gates\n");
-        return NULL;
+        printf("nvme: clock-gates not set\n");
+        cg = 0;
     }
     nvme_die = FIELD_GET(PMGR_DIE_ID, cg);
     printf("nvme: ANS is on die %d\n", nvme_die);
@@ -427,10 +427,55 @@ out_adminq:
     return false;
 }
 
+void nvme_ensure_shutdown(void)
+{
+    nvme_asc = asc_init("/arm-io/ans");
+    if (!nvme_asc)
+        return;
+
+    if (!asc_cpu_running(nvme_asc)) {
+        printf("nvme: ANS not running\n");
+        asc_free(nvme_asc);
+        nvme_asc = NULL;
+        return;
+    }
+
+    printf("nvme: Found ANS left powered, doing a proper shutdown\n");
+
+    nvme_sart = sart_init("/arm-io/sart-ans");
+    if (!nvme_sart)
+        goto fail;
+
+    nvme_rtkit = rtkit_init("nvme", nvme_asc, NULL, NULL, nvme_sart);
+    if (!nvme_rtkit)
+        goto fail;
+
+    if (!rtkit_boot(nvme_rtkit))
+        goto fail;
+
+    rtkit_sleep(nvme_rtkit);
+
+fail:
+    if (nvme_rtkit) {
+        rtkit_free(nvme_rtkit);
+        nvme_rtkit = NULL;
+    }
+    if (nvme_sart) {
+        sart_free(nvme_sart);
+        nvme_sart = NULL;
+    }
+    asc_free(nvme_asc);
+    nvme_asc = NULL;
+
+    // Some machines call this ANS, some ANS2...
+    pmgr_reset(nvme_die, "ANS");
+    pmgr_reset(nvme_die, "ANS2");
+}
+
 void nvme_shutdown(void)
 {
     if (!nvme_initialized) {
-        printf("nvme: trying to shut down but not initialized\n");
+        // nvme_ensure_shutdown();
         return;
     }
 

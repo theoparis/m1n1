@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+#include "../build/build_tag.h"
+
 #include "payload.h"
 #include "adt.h"
 #include "assert.h"
@@ -24,6 +27,9 @@ static const u8 kernel_magic[] = {'A', 'R', 'M', 0x64};          // at 0x38
 static const u8 cpio_magic[] = {'0', '7', '0', '7', '0'};        // '1' or '2' next
 static const u8 img4_magic[] = {0x16, 0x04, 'I', 'M', 'G', '4'}; // IA5String 'IMG4'
 static const u8 sig_magic[] = {'m', '1', 'n', '1', '_', 's', 'i', 'g'};
+static const u8 initramfs_magic[] = {
+    'm', '1', 'n', '1', '_', 'i', 'n',
+    'i', 't', 'r', 'a', 'm', 'f', 's'}; // followed by size as little endian uint32_t
 static const u8 empty[] = {0, 0, 0, 0};
 
 static char expect_compatible[256];
@@ -152,8 +158,17 @@ static void *load_kernel(void *p, size_t size)
 
 #define MAX_CHOSEN_VARS 16
 
+#ifdef CHAINLOADING
+static size_t chosen_cnt = 1;
+static char *chosen[MAX_CHOSEN_VARS] = {
+    "chosen.m1n1-stage1-version=" BUILD_TAG,
+};
+#else
 static size_t chosen_cnt = 0;
 static char *chosen[MAX_CHOSEN_VARS];
+#endif
+
+static bool enable_tso = false;
 
 static bool check_var(u8 **p)
 {
@@ -179,6 +194,8 @@ static bool check_var(u8 **p)
         chainload_spec = val;
     } else if (IS_VAR("display=")) {
         display_configure(val);
+    } else if (IS_VAR("tso=")) {
+        enable_tso = val[0] == '1';
     } else {
         printf("Unknown variable %s\n", *p);
     }
@@ -214,6 +231,12 @@ static void *load_one_payload(void *start, size_t size)
 
         printf("Found a m1n1 signature at %p, skipping 0x%x bytes\n", p, size);
         return p + size;
+    } else if (!memcmp(p, initramfs_magic, sizeof(initramfs_magic))) {
+        u32 size;
+        memcpy(&size, p + sizeof(initramfs_magic), 4);
+        printf("Found a m1n1 initramfs payload at %p, 0x%x bytes\n", p, size);
+        p += sizeof(initramfs_magic) + 4;
+        return load_cpio(p, size);
     } else if (check_var(&p)) {
         return p;
     } else if (!memcmp(p, empty, sizeof empty) ||
@@ -224,6 +247,13 @@ static void *load_one_payload(void *start, size_t size)
         printf("Unknown payload at %p (magic: %02x%02x%02x%02x)\n", p, p[0], p[1], p[2], p[3]);
         return NULL;
     }
+}
+
+void do_enable_tso(void)
+{
+    u64 actlr = mrs(ACTLR_EL1);
+    actlr |= BIT(1); // Enable TSO
+    msr(ACTLR_EL1, actlr);
 }
 
 int payload_run(void)
@@ -255,6 +285,17 @@ int payload_run(void)
 
     if (kernel && fdt) {
         smp_start_secondaries();
+        if (enable_tso) {
+
+            do_enable_tso();
+            for (int i = 1; i < MAX_CPUS; i++) {
+                if (smp_is_alive(i)) {
+                    smp_call0(i, do_enable_tso);
+                    smp_wait(i);
+                }
+            }
+            kboot_set_chosen("apple,tso", "");
+        }
 
         for (size_t i = 0; i < chosen_cnt; i++) {
             char *val = memchr(chosen[i], '=', MAX_VAR_NAME + 1);

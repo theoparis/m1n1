@@ -153,7 +153,11 @@ put_simd_state:
 .globl deep_wfi
 .type deep_wfi, @function
 deep_wfi:
-    str x30, [sp, #-16]!
+    mrs x0, SYS_IMP_APL_CYC_OVRD
+    orr x1, x0, #CYC_OVRD_WFI_MODE(3)
+    msr SYS_IMP_APL_CYC_OVRD, x1
+
+    stp x30, x0, [sp, #-16]!
     stp x28, x29, [sp, #-16]!
     stp x26, x27, [sp, #-16]!
     stp x24, x25, [sp, #-16]!
@@ -161,15 +165,7 @@ deep_wfi:
     stp x20, x21, [sp, #-16]!
     stp x18, x19, [sp, #-16]!
 
-    mrs x0, SYS_IMP_APL_CYC_OVRD
-    orr x0, x0, #(3L << 24)
-    msr SYS_IMP_APL_CYC_OVRD, x0
-
     wfi
-
-    mrs x0, SYS_IMP_APL_CYC_OVRD
-    bic x0, x0, #(1L << 24)
-    msr SYS_IMP_APL_CYC_OVRD, x0
 
     ldp x18, x19, [sp], #16
     ldp x20, x21, [sp], #16
@@ -177,6 +173,46 @@ deep_wfi:
     ldp x24, x25, [sp], #16
     ldp x26, x27, [sp], #16
     ldp x28, x29, [sp], #16
-    ldr x30, [sp], #16
+    ldp x30, x0, [sp], #16
+
+    msr SYS_IMP_APL_CYC_OVRD, x0
 
     ret
+
+.globl cpu_sleep
+.type cpu_sleep, @function
+cpu_sleep:
+    cmp x0, #0
+    bne 1f
+
+    mrs x1, SYS_IMP_APL_CYC_OVRD
+    and x1, x1, #~CYC_OVRD_IRQ_MODE_MASK
+    orr x1, x1, #CYC_OVRD_IRQ_MODE(2)
+    and x1, x1, #~CYC_OVRD_FIQ_MODE_MASK
+    orr x1, x1, #CYC_OVRD_FIQ_MODE(2)
+    msr SYS_IMP_APL_CYC_OVRD, x1
+1:
+
+    cmp x0, #0
+    beq 2f
+
+    mrs x1, SYS_IMP_APL_ACC_OVRD
+    orr x1, x1, #ACC_OVRD_PWR_DN_SRM(3)
+    and x1, x1, #~ACC_OVRD_DIS_L2_FLUSH_ACC_SLEEP_MASK
+    orr x1, x1, #ACC_OVRD_DIS_L2_FLUSH_ACC_SLEEP(2)
+    orr x1, x1, #ACC_OVRD_TRAIN_DOWN_LINK(3)
+    orr x1, x1, #ACC_OVRD_POWER_DOWN_CPM(3)
+    orr x1, x1, #ACC_OVRD_DISABLE_PIO_ON_WFI_CPU
+    orr x1, x1, #ACC_OVRD_DEEP_SLEEP
+    msr SYS_IMP_APL_ACC_OVRD, x1
+2:
+
+    mrs x1, SYS_IMP_APL_CYC_OVRD
+    orr x1, x1, #CYC_OVRD_WFI_MODE(3)
+    orr x1, x1, #CYC_OVRD_DISABLE_WFI_RET
+    msr SYS_IMP_APL_CYC_OVRD, x1
+
+3:
+    isb
+    wfi
+    b 3b

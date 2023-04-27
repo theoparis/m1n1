@@ -36,7 +36,7 @@ void hv_exit_guest(void) __attribute__((noreturn));
 static u64 stolen_time = 0;
 static u64 exc_entry_time;
 
-extern u32 hv_cpus_in_guest;
+extern u64 hv_cpus_in_guest;
 extern int hv_pinned_cpu;
 extern int hv_want_cpu;
 
@@ -146,6 +146,11 @@ void hv_set_time_stealing(bool enabled, bool reset)
         stolen_time = 0;
 }
 
+void hv_add_time(s64 time)
+{
+    stolen_time -= (u64)time;
+}
+
 static void hv_update_fiq(void)
 {
     u64 hcr = mrs(HCR_EL2);
@@ -192,7 +197,7 @@ static void hv_update_fiq(void)
             _msr(sr_tkn(sr), regs[rt]);                                                            \
         return true;
 
-static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
+static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
 {
     u64 reg = iss & (ESR_ISS_MSR_OP0 | ESR_ISS_MSR_OP2 | ESR_ISS_MSR_OP1 | ESR_ISS_MSR_CRn |
                      ESR_ISS_MSR_CRm);
@@ -207,6 +212,13 @@ static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
         /* Some kind of timer */
         SYSREG_PASS(sys_reg(3, 7, 15, 1, 1));
         SYSREG_PASS(sys_reg(3, 7, 15, 3, 1));
+        /* Architectural timer, for ECV */
+        SYSREG_MAP(SYS_CNTV_CTL_EL0, SYS_CNTV_CTL_EL02)
+        SYSREG_MAP(SYS_CNTV_CVAL_EL0, SYS_CNTV_CVAL_EL02)
+        SYSREG_MAP(SYS_CNTV_TVAL_EL0, SYS_CNTV_TVAL_EL02)
+        SYSREG_MAP(SYS_CNTP_CTL_EL0, SYS_CNTP_CTL_EL02)
+        SYSREG_MAP(SYS_CNTP_CVAL_EL0, SYS_CNTP_CVAL_EL02)
+        SYSREG_MAP(SYS_CNTP_TVAL_EL0, SYS_CNTP_TVAL_EL02)
         /* Spammy stuff seen on t600x p-cores */
         SYSREG_PASS(sys_reg(3, 2, 15, 12, 0));
         SYSREG_PASS(sys_reg(3, 2, 15, 13, 0));
@@ -530,51 +542,13 @@ static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(sys_reg(1, 0, 8, 1, 2)) // TLBI ASIDE1OS
         SYSREG_PASS(sys_reg(1, 0, 8, 5, 1)) // TLBI RVAE1OS
 
-        /*
-         * Handle this one here because m1n1/Linux (will) use it for explicit cpuidle.
-         * We can pass it through; going into deep sleep doesn't break the HV since we
-         * don't do any wfis that assume otherwise in m1n1. However, don't het macOS
-         * disable WFI ret (when going into systemwide sleep), since that breaks things.
-         */
-        case SYSREG_ISS(SYS_IMP_APL_CYC_OVRD):
-            if (is_read) {
-                regs[rt] = mrs(SYS_IMP_APL_CYC_OVRD);
-            } else {
-                msr(SYS_IMP_APL_CYC_OVRD, regs[rt] & ~CYC_OVRD_DISABLE_WFI_RET);
-                if (regs[rt] & CYC_OVRD_DISABLE_WFI_RET)
-                    printf("msr(SYS_IMP_APL_CYC_OVRD, 0x%08lx): Filtered WFI RET disable\n",
-                           regs[rt]);
-            }
-            return true;
-            /* clang-format off */
-
-        /* IPI handling */
-        SYSREG_PASS(SYS_IMP_APL_IPI_CR_EL1)
-        /* clang-format on */
-        case SYSREG_ISS(SYS_IMP_APL_IPI_RR_LOCAL_EL1): {
-            assert(!is_read);
-            u64 mpidr = (regs[rt] & 0xff) | (mrs(MPIDR_EL1) & 0xffff00);
-            msr(SYS_IMP_APL_IPI_RR_LOCAL_EL1, regs[rt]);
-            for (int i = 0; i < MAX_CPUS; i++)
-                if (mpidr == smp_get_mpidr(i))
-                    pcpu[i].ipi_queued = true;
-            return true;
-        }
-        case SYSREG_ISS(SYS_IMP_APL_IPI_RR_GLOBAL_EL1):
-            assert(!is_read);
-            u64 mpidr = (regs[rt] & 0xff) | ((regs[rt] & 0xff0000) >> 8);
-            msr(SYS_IMP_APL_IPI_RR_GLOBAL_EL1, regs[rt]);
-            for (int i = 0; i < MAX_CPUS; i++) {
-                if (mpidr == (smp_get_mpidr(i) & 0xffff))
-                    pcpu[i].ipi_queued = true;
-            }
-            return true;
         case SYSREG_ISS(SYS_IMP_APL_IPI_SR_EL1):
             if (is_read)
                 regs[rt] = PERCPU(ipi_pending) ? IPI_SR_PENDING : 0;
             else if (regs[rt] & IPI_SR_PENDING)
                 PERCPU(ipi_pending) = false;
             return true;
+
         /* shadow the interrupt mode and state flag */
         case SYSREG_ISS(SYS_IMP_APL_PMCR0):
             if (is_read) {
@@ -588,6 +562,69 @@ static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
                 msr(SYS_IMP_APL_PMCR0, regs[rt] & ~PERCPU(exc_entry_pmcr0_cnt));
             }
             return true;
+
+        /*
+         * Handle this one here because m1n1/Linux (will) use it for explicit cpuidle.
+         * We can pass it through; going into deep sleep doesn't break the HV since we
+         * don't do any wfis that assume otherwise in m1n1. However, don't het macOS
+         * disable WFI ret (when going into systemwide sleep), since that breaks things.
+         */
+        case SYSREG_ISS(SYS_IMP_APL_CYC_OVRD):
+            if (is_read) {
+                regs[rt] = mrs(SYS_IMP_APL_CYC_OVRD);
+            } else {
+                if (regs[rt] & (CYC_OVRD_DISABLE_WFI_RET | CYC_OVRD_FIQ_MODE_MASK))
+                    return false;
+                msr(SYS_IMP_APL_CYC_OVRD, regs[rt]);
+            }
+            return true;
+            /* clang-format off */
+        /* IPI handling */
+        SYSREG_PASS(SYS_IMP_APL_IPI_CR_EL1)
+        /* M1RACLES reg, handle here due to silly 12.0 "mitigation" */
+        case SYSREG_ISS(sys_reg(3, 5, 15, 10, 1)):
+            if (is_read)
+                regs[rt] = 0;
+            return true;
+    }
+    return false;
+}
+
+static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
+{
+    u64 reg = iss & (ESR_ISS_MSR_OP0 | ESR_ISS_MSR_OP2 | ESR_ISS_MSR_OP1 | ESR_ISS_MSR_CRn |
+                     ESR_ISS_MSR_CRm);
+    u64 rt = FIELD_GET(ESR_ISS_MSR_Rt, iss);
+    bool is_read = iss & ESR_ISS_MSR_DIR;
+
+    u64 *regs = ctx->regs;
+
+    regs[31] = 0;
+
+    switch (reg) {
+        /* clang-format on */
+        case SYSREG_ISS(SYS_IMP_APL_IPI_RR_LOCAL_EL1): {
+            assert(!is_read);
+            u64 mpidr = (regs[rt] & 0xff) | (mrs(MPIDR_EL1) & 0xffff00);
+            for (int i = 0; i < MAX_CPUS; i++)
+                if (mpidr == smp_get_mpidr(i)) {
+                    pcpu[i].ipi_queued = true;
+                    msr(SYS_IMP_APL_IPI_RR_LOCAL_EL1, regs[rt]);
+                    return true;
+                }
+            return false;
+        }
+        case SYSREG_ISS(SYS_IMP_APL_IPI_RR_GLOBAL_EL1):
+            assert(!is_read);
+            u64 mpidr = (regs[rt] & 0xff) | ((regs[rt] & 0xff0000) >> 8);
+            for (int i = 0; i < MAX_CPUS; i++) {
+                if (mpidr == (smp_get_mpidr(i) & 0xffff)) {
+                    pcpu[i].ipi_queued = true;
+                    msr(SYS_IMP_APL_IPI_RR_GLOBAL_EL1, regs[rt]);
+                    return true;
+                }
+            }
+            return false;
 #ifdef DEBUG_PMU_IRQ
         case SYSREG_ISS(SYS_IMP_APL_PMC0):
             if (is_read) {
@@ -599,17 +636,12 @@ static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
             }
             return true;
 #endif
-        /* M1RACLES reg, handle here due to silly 12.0 "mitigation" */
-        case SYSREG_ISS(sys_reg(3, 5, 15, 10, 1)):
-            if (is_read)
-                regs[rt] = 0;
-            return true;
     }
 
     return false;
 }
 
-static void hv_exc_entry(struct exc_info *ctx)
+static void hv_get_context(struct exc_info *ctx)
 {
     ctx->spsr = hv_get_spsr();
     ctx->elr = hv_get_elr();
@@ -623,12 +655,15 @@ static void hv_exc_entry(struct exc_info *ctx)
     ctx->mpidr = mrs(MPIDR_EL1);
 
     sysop("isb");
+}
 
+static void hv_exc_entry(void)
+{
     // Enable SErrors in the HV, but only if not already pending
     if (!(mrs(ISR_EL1) & 0x100))
         sysop("msr daifclr, 4");
 
-    __atomic_sub_fetch(&hv_cpus_in_guest, 1, __ATOMIC_ACQUIRE);
+    __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(smp_id()), __ATOMIC_ACQUIRE);
     spin_lock(&bhl);
     hv_wdt_breadcrumb('X');
     exc_entry_time = mrs(CNTPCT_EL0);
@@ -646,7 +681,8 @@ static void hv_exc_exit(struct exc_info *ctx)
     reg_set(SYS_IMP_APL_PMCR0, PERCPU(exc_entry_pmcr0_cnt));
     msr(CNTVOFF_EL2, stolen_time);
     spin_unlock(&bhl);
-    __atomic_add_fetch(&hv_cpus_in_guest, 1, __ATOMIC_ACQUIRE);
+    hv_maybe_exit();
+    __atomic_or_fetch(&hv_cpus_in_guest, BIT(smp_id()), __ATOMIC_ACQUIRE);
 
     hv_set_spsr(ctx->spsr);
     hv_set_elr(ctx->elr);
@@ -657,9 +693,35 @@ static void hv_exc_exit(struct exc_info *ctx)
 void hv_exc_sync(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('S');
-    hv_exc_entry(ctx);
+    hv_get_context(ctx);
     bool handled = false;
     u32 ec = FIELD_GET(ESR_EC, ctx->esr);
+
+    switch (ec) {
+        case ESR_EC_MSR:
+            hv_wdt_breadcrumb('m');
+            handled = hv_handle_msr_unlocked(ctx, FIELD_GET(ESR_ISS, ctx->esr));
+            break;
+        case ESR_EC_IMPDEF:
+            hv_wdt_breadcrumb('a');
+            switch (FIELD_GET(ESR_ISS, ctx->esr)) {
+                case ESR_ISS_IMPDEF_MSR:
+                    handled = hv_handle_msr_unlocked(ctx, ctx->afsr1);
+                    break;
+            }
+            break;
+    }
+
+    if (handled) {
+        hv_wdt_breadcrumb('#');
+        ctx->elr += 4;
+        hv_set_elr(ctx->elr);
+        hv_update_fiq();
+        hv_wdt_breadcrumb('s');
+        return;
+    }
+
+    hv_exc_entry();
 
     switch (ec) {
         case ESR_EC_DABORT_LOWER:
@@ -699,7 +761,8 @@ void hv_exc_sync(struct exc_info *ctx)
 void hv_exc_irq(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('I');
-    hv_exc_entry(ctx);
+    hv_get_context(ctx);
+    hv_exc_entry();
     hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_IRQ, NULL);
     hv_exc_exit(ctx);
     hv_wdt_breadcrumb('i');
@@ -723,19 +786,23 @@ void hv_exc_fiq(struct exc_info *ctx)
     if (smp_id() != interruptible_cpu && !(mrs(ISR_EL1) & 0x40) && hv_want_cpu == -1) {
         // Non-interruptible CPU and it was just a timer tick (or spurious), so just update FIQs
         hv_update_fiq();
-        hv_arm_tick();
+        hv_arm_tick(true);
         return;
     }
 
     // Slow (single threaded) path
     hv_wdt_breadcrumb('F');
-    hv_exc_entry(ctx);
+    hv_get_context(ctx);
+    hv_exc_entry();
 
     // Only poll for HV events in the interruptible CPU
     if (tick) {
-        if (smp_id() == interruptible_cpu)
+        if (smp_id() == interruptible_cpu) {
             hv_tick(ctx);
-        hv_arm_tick();
+            hv_arm_tick(false);
+        } else {
+            hv_arm_tick(true);
+        }
     }
 
     if (mrs(CNTV_CTL_EL0) == (CNTx_CTL_ISTATUS | CNTx_CTL_ENABLE)) {
@@ -778,7 +845,8 @@ void hv_exc_fiq(struct exc_info *ctx)
 void hv_exc_serr(struct exc_info *ctx)
 {
     hv_wdt_breadcrumb('E');
-    hv_exc_entry(ctx);
+    hv_get_context(ctx);
+    hv_exc_entry();
     hv_exc_proxy(ctx, START_EXCEPTION_LOWER, EXC_SERROR, NULL);
     hv_exc_exit(ctx);
     hv_wdt_breadcrumb('e');

@@ -488,6 +488,7 @@ class M1N1Proxy(Reloadable):
     P_GET_SIMD_STATE = 0x00e
     P_PUT_SIMD_STATE = 0x00f
     P_REBOOT = 0x010
+    P_SLEEP = 0x011
 
     P_WRITE64 = 0x100
     P_WRITE32 = 0x101
@@ -548,6 +549,8 @@ class M1N1Proxy(Reloadable):
     P_SMP_CALL_SYNC = 0x502
     P_SMP_WAIT = 0x503
     P_SMP_SET_WFE_MODE = 0x504
+    P_SMP_IS_ALIVE = 0x505
+    P_SMP_STOP_SECONDARIES = 0x506
 
     P_HEAPBLOCK_ALLOC = 0x600
     P_MALLOC = 0x601
@@ -596,6 +599,8 @@ class M1N1Proxy(Reloadable):
     P_HV_WRITE_HCR = 0xc0c
     P_HV_MAP_VIRTIO = 0xc0d
     P_VIRTIO_PUT_BUFFER = 0xc0e
+    P_HV_EXIT_CPU = 0xc0f
+    P_HV_ADD_TIME = 0xc10
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -670,6 +675,8 @@ class M1N1Proxy(Reloadable):
                 if (i < (len(args) - 1)) and args[i + 1] is None:
                     args[i + 1] = len(arg)
                 arg = p
+            if arg < 0:
+                arg &= (1 << 64) - 1
             args2.append(arg)
         try:
             return self._request(opcode, *args2, **kwargs)
@@ -740,6 +747,8 @@ class M1N1Proxy(Reloadable):
         self.request(self.P_PUT_SIMD_STATE, buf)
     def reboot(self):
         self.request(self.P_REBOOT, no_reply=True)
+    def sleep(self, deep=False):
+        self.request(self.P_SLEEP, deep, no_reply=True)
 
     def write64(self, addr, data):
         '''write 8 byte value to given address'''
@@ -940,6 +949,10 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_SMP_WAIT, cpu)
     def smp_set_wfe_mode(self, mode):
         return self.request(self.P_SMP_SET_WFE_MODE, mode)
+    def smp_is_alive(self, cpu):
+        return self.request(self.P_SMP_IS_ALIVE, cpu)
+    def smp_stop_secondaries(self, deep_sleep=False):
+        self.request(self.P_SMP_STOP_SECONDARIES, deep_sleep)
 
     def heapblock_alloc(self, size):
         return self.request(self.P_HEAPBLOCK_ALLOC, size)
@@ -1033,6 +1046,10 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_MAP_VIRTIO, base, config)
     def virtio_put_buffer(self, base, qu, idx, length):
         return self.request(self.P_VIRTIO_PUT_BUFFER, base, qu, idx, length)
+    def hv_exit_cpu(self, cpu=-1):
+        return self.request(self.P_HV_EXIT_CPU, cpu)
+    def hv_add_time(self, time):
+        return self.request(self.P_HV_ADD_TIME, time)
 
     def fb_init(self):
         return self.request(self.P_FB_INIT)

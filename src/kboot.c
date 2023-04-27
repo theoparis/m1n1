@@ -5,6 +5,8 @@
 #include "kboot.h"
 #include "adt.h"
 #include "assert.h"
+#include "clk.h"
+#include "cpufreq.h"
 #include "dapf.h"
 #include "devicetree.h"
 #include "exception.h"
@@ -15,6 +17,7 @@
 #include "pmgr.h"
 #include "sep.h"
 #include "smp.h"
+#include "tunables.h"
 #include "types.h"
 #include "usb.h"
 #include "utils.h"
@@ -653,9 +656,17 @@ static int dt_set_multitouch(void)
     if (node < 0)
         bail("FDT: alias points at nonexistent node");
 
-    int anode = adt_path_offset(adt, "/arm-io/spi0/multi-touch");
+    const char *adt_touchbar;
+    if (fdt_node_check_compatible(dt, 0, "apple,j293") == 0)
+        adt_touchbar = "/arm-io/spi0/multi-touch";
+    else if (fdt_node_check_compatible(dt, 0, "apple,j493") == 0)
+        adt_touchbar = "/arm-io/spi3/touch-bar";
+    else
+        return 0;
+
+    int anode = adt_path_offset(adt, adt_touchbar);
     if (anode < 0)
-        bail("ADT /arm-io/spi0/multi-touch not found\n");
+        bail("ADT: touchbar node %s not found\n", adt_touchbar);
 
     u32 len;
     const u8 *cal_blob = adt_getprop(adt, anode, "multi-touch-calibration", &len);
@@ -1161,8 +1172,10 @@ static int dt_device_set_reserved_mem(int node, dart_dev_t *dart, const char *na
     int ret;
 
     u64 iova = dart_get_mapping(dart, name, paddr, size);
-    if (DART_IS_ERR(iova))
-        bail("ADT: no mapping found for '%s' 0x%012lx iova:0x%08lx)\n", name, paddr, iova);
+    if (DART_IS_ERR(iova)) {
+        printf("ADT: no mapping found for '%s' 0x%012lx iova:0x%08lx)\n", name, paddr, iova);
+        return 0;
+    }
 
     ret = fdt_appendprop_u32(dt, node, "iommu-addresses", phandle);
     if (ret != 0)
@@ -1565,6 +1578,17 @@ static struct disp_mapping dcpext_reserved_regions_t600x[MAX_DCPEXT][2] = {
     },
 };
 
+static struct disp_mapping disp_reserved_regions_t602x[] = {
+    {"region-id-49", "dcp_txt", true, false, false},
+    {"region-id-50", "dcp_data", true, false, false},
+    {"region-id-57", "region57", true, false, false},
+    // The 2 following regions are mapped in dart-dcp sid 0 and dart-disp0 sid 0 and 4
+    {"region-id-94", "region94", true, true, false},
+    {"region-id-95", "region95", true, false, true},
+    // used on M1 Pro/Max/Ultra, mapped to dcp and disp0
+    {"region-id-157", "region157", true, true, false},
+};
+
 #define ARRAY_SIZE(s) (sizeof(s) / sizeof((s)[0]))
 
 static int dt_set_display(void)
@@ -1616,6 +1640,13 @@ static int dt_set_display(void)
                                                dcpext_reserved_regions_t600x[n],
                                                ARRAY_SIZE(dcpext_reserved_regions_t600x[n]));
         }
+    } else if (!fdt_node_check_compatible(dt, 0, "apple,t6020") ||
+               !fdt_node_check_compatible(dt, 0, "apple,t6021")) {
+        ret = dt_carveout_reserved_regions("dcp", "disp0", "disp0_piodma",
+                                           disp_reserved_regions_t602x,
+                                           ARRAY_SIZE(disp_reserved_regions_t602x));
+        if (ret)
+            return ret;
     } else {
         printf("DT: unknown compatible, skip display reserved-memory setup\n");
         return 0;
@@ -1949,6 +1980,10 @@ int kboot_prepare_dt(void *fdt)
 
 int kboot_boot(void *kernel)
 {
+    tunables_apply_static();
+    clk_init();
+    cpufreq_init();
+
     usb_init();
     pcie_init();
     dapf_init_all();

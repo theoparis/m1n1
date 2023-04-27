@@ -78,6 +78,7 @@ void virtio_put_buffer(u64 base, int qu, u32 id, u32 len);
 /* Exceptions */
 void hv_exc_proxy(struct exc_info *ctx, uartproxy_boot_reason_t reason, u32 type, void *extra);
 void hv_set_time_stealing(bool enabled, bool reset);
+void hv_add_time(s64 time);
 
 /* WDT */
 void hv_wdt_pet(void);
@@ -102,10 +103,11 @@ void hv_set_elr(u64 val);
 void hv_init(void);
 void hv_start(void *entry, u64 regs[4]);
 void hv_start_secondary(int cpu, void *entry, u64 regs[4]);
+void hv_exit_cpu(int cpu);
 void hv_rendezvous(void);
 bool hv_switch_cpu(int cpu);
 void hv_pin_cpu(int cpu);
-void hv_arm_tick(void);
+void hv_arm_tick(bool secondary);
 void hv_rearm(void);
 void hv_maybe_exit(void);
 void hv_tick(struct exc_info *ctx);

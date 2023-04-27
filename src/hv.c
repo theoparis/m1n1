@@ -12,7 +12,8 @@
 #include "usb.h"
 #include "utils.h"
 
-#define HV_TICK_RATE 1000
+#define HV_TICK_RATE      1000
+#define HV_SLOW_TICK_RATE 1
 
 DECLARE_SPINLOCK(bhl);
 
@@ -22,13 +23,15 @@ void hv_exit_guest(void) __attribute__((noreturn));
 extern char _hv_vectors_start[0];
 
 u64 hv_tick_interval;
+u64 hv_secondary_tick_interval;
 
 int hv_pinned_cpu;
 int hv_want_cpu;
 
-static bool hv_should_exit;
+static bool hv_has_ecv;
+static bool hv_should_exit[MAX_CPUS];
 bool hv_started_cpus[MAX_CPUS];
-u32 hv_cpus_in_guest;
+u64 hv_cpus_in_guest;
 u64 hv_saved_sp[MAX_CPUS];
 
 struct hv_secondary_info_t {
@@ -60,9 +63,6 @@ void hv_init(void)
     smp_set_wfe_mode(true);
     hv_wdt_init();
 
-    // Enable physical timer for EL1
-    msr(CNTHCTL_EL2, CNTHCTL_EL1PTEN | CNTHCTL_EL1PCTEN);
-
     hv_pt_init();
 
     // Configure hypervisor defaults
@@ -86,6 +86,24 @@ void hv_init(void)
     // Compute tick interval
     hv_tick_interval = mrs(CNTFRQ_EL0) / HV_TICK_RATE;
 
+    hv_has_ecv = mrs(ID_AA64MMFR0_EL1) & (0xfULL << 60);
+
+    if (hv_has_ecv) {
+        printf("HV: ECV enabled\n");
+        reg_set(CNTHCTL_EL2,
+                CNTHCTL_EL1NVVCT | CNTHCTL_EL1NVPCT | CNTHCTL_EL1TVT | CNTHCTL_EL1PCTEN);
+        hv_secondary_tick_interval = mrs(CNTFRQ_EL0) / HV_SLOW_TICK_RATE;
+    } else {
+        printf("HV: No ECV supported\n");
+        // Enable physical timer for EL1
+        msr(CNTHCTL_EL2, CNTHCTL_EL1PTEN | CNTHCTL_EL1PCTEN);
+
+        hv_secondary_tick_interval = hv_tick_interval;
+    }
+
+    // Set deep WFI back to defaults
+    reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+
     sysop("dsb ishst");
     sysop("tlbi alle1is");
     sysop("dsb ish");
@@ -99,7 +117,7 @@ static void hv_set_gxf_vbar(void)
 
 void hv_start(void *entry, u64 regs[4])
 {
-    hv_should_exit = false;
+    memset(hv_should_exit, 0, sizeof(hv_should_exit));
     memset(hv_started_cpus, 0, sizeof(hv_started_cpus));
     hv_started_cpus[0] = 1;
 
@@ -124,22 +142,29 @@ void hv_start(void *entry, u64 regs[4])
     hv_secondary_info.sprr_config = mrs(SYS_IMP_APL_SPRR_CONFIG_EL1);
     hv_secondary_info.gxf_config = mrs(SYS_IMP_APL_GXF_CONFIG_EL1);
 
-    hv_arm_tick();
+    hv_arm_tick(false);
     hv_pinned_cpu = -1;
     hv_want_cpu = -1;
-    hv_cpus_in_guest = 1;
+    hv_cpus_in_guest = BIT(smp_id());
 
     hv_enter_guest(regs[0], regs[1], regs[2], regs[3], entry);
 
-    __atomic_sub_fetch(&hv_cpus_in_guest, 1, __ATOMIC_ACQUIRE);
+    __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(smp_id()), __ATOMIC_ACQUIRE);
     spin_lock(&bhl);
 
     hv_wdt_stop();
 
-    hv_should_exit = true;
     printf("HV: Exiting hypervisor (main CPU)\n");
 
-    for (int i = 0; i < MAX_CPUS; i++) {
+    spin_unlock(&bhl);
+    // Wait a bit for the guest CPUs to exit on their own if they are in the process.
+    udelay(200000);
+    spin_lock(&bhl);
+
+    hv_started_cpus[0] = false;
+
+    for (int i = 1; i < MAX_CPUS; i++) {
+        hv_should_exit[i] = true;
         if (hv_started_cpus[i]) {
             printf("HV: Waiting for CPU %d to exit\n", i);
             spin_unlock(&bhl);
@@ -175,10 +200,12 @@ static void hv_init_secondary(struct hv_secondary_info_t *info)
     msr(SYS_IMP_APL_SPRR_CONFIG_EL1, info->sprr_config);
     msr(SYS_IMP_APL_GXF_CONFIG_EL1, info->gxf_config);
 
+    reg_mask(SYS_IMP_APL_CYC_OVRD, CYC_OVRD_WFI_MODE_MASK, CYC_OVRD_WFI_MODE(0));
+
     if (gxf_enabled())
         gl2_call(hv_set_gxf_vbar, 0, 0, 0, 0);
 
-    hv_arm_tick();
+    hv_arm_tick(true);
 }
 
 static void hv_enter_secondary(void *entry, u64 regs[4])
@@ -187,11 +214,11 @@ static void hv_enter_secondary(void *entry, u64 regs[4])
 
     spin_lock(&bhl);
 
-    hv_should_exit = true;
     printf("HV: Exiting from CPU %d\n", smp_id());
 
-    __atomic_sub_fetch(&hv_cpus_in_guest, 1, __ATOMIC_ACQUIRE);
+    __atomic_and_fetch(&hv_cpus_in_guest, ~BIT(smp_id()), __ATOMIC_ACQUIRE);
 
+    hv_started_cpus[smp_id()] = false;
     spin_unlock(&bhl);
 }
 
@@ -208,14 +235,25 @@ void hv_start_secondary(int cpu, void *entry, u64 regs[4])
 
     printf("HV: Entering guest secondary %d at %p\n", cpu, entry);
     hv_started_cpus[cpu] = true;
-    __atomic_add_fetch(&hv_cpus_in_guest, 1, __ATOMIC_ACQUIRE);
+    __atomic_or_fetch(&hv_cpus_in_guest, BIT(smp_id()), __ATOMIC_ACQUIRE);
 
     iodev_console_flush();
     smp_call4(cpu, hv_enter_secondary, (u64)entry, (u64)regs, 0, 0);
 }
 
+void hv_exit_cpu(int cpu)
+{
+    if (cpu == -1)
+        cpu = smp_id();
+
+    printf("HV: Requesting exit of CPU#%d from the guest\n", cpu);
+    hv_should_exit[cpu] = true;
+}
+
 void hv_rendezvous(void)
 {
+    int timeout = 1000000;
+
     if (!__atomic_load_n(&hv_cpus_in_guest, __ATOMIC_ACQUIRE))
         return;
 
@@ -225,8 +263,14 @@ void hv_rendezvous(void)
             smp_send_ipi(i);
         }
     }
-    while (__atomic_load_n(&hv_cpus_in_guest, __ATOMIC_ACQUIRE))
-        ;
+
+    while (timeout--) {
+        if (!__atomic_load_n(&hv_cpus_in_guest, __ATOMIC_ACQUIRE))
+            return;
+    }
+
+    panic("HV: Failed to rendezvous, missing CPUs: 0x%lx\n",
+          __atomic_load_n(&hv_cpus_in_guest, __ATOMIC_ACQUIRE));
 }
 
 bool hv_switch_cpu(int cpu)
@@ -310,15 +354,18 @@ void hv_set_elr(u64 val)
         return msr(ELR_EL2, val);
 }
 
-void hv_arm_tick(void)
+void hv_arm_tick(bool secondary)
 {
-    msr(CNTP_TVAL_EL0, hv_tick_interval);
+    if (secondary)
+        msr(CNTP_TVAL_EL0, hv_secondary_tick_interval);
+    else
+        msr(CNTP_TVAL_EL0, hv_tick_interval);
     msr(CNTP_CTL_EL0, CNTx_CTL_ENABLE);
 }
 
 void hv_maybe_exit(void)
 {
-    if (hv_should_exit) {
+    if (hv_should_exit[smp_id()]) {
         hv_exit_guest();
     }
 }

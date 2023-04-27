@@ -15,7 +15,9 @@ TEST_CPUS = [1, 4]
 CLUSTER_PSTATE = 0x20020
 CLUSTER_STATUS = 0x20050
 
-if u.adt["/chosen"].chip_id == 0x8103:
+chip_id = u.adt["/chosen"].chip_id
+
+if chip_id in (0x8103, 0x6000, 0x6001, 0x6002):
     CREG = [
         0x210e00000,
         0x211e00000,
@@ -23,13 +25,16 @@ if u.adt["/chosen"].chip_id == 0x8103:
 
     MAX_PSTATE = [5, 15]
 
-elif u.adt["/chosen"].chip_id == 0x8112:
+elif chip_id in (0x8121, 0x6020, 0x6021, 0x6022):
     CREG = [
         0x210e00000,
         0x211e00000,
     ]
 
-    MAX_PSTATE = [7, 17]
+    if u.adt["/chosen"].target_type == "J416c":
+        MAX_PSTATE = [7, 19]
+    else:
+        MAX_PSTATE = [7, 17]
 
 code = u.malloc(0x1000)
 
@@ -93,7 +98,7 @@ def bench_cpu(idx, loops=10000000):
     return mhz
 
 def set_pstate(cluster, pstate):
-    p.mask64(CREG[cluster] + CLUSTER_PSTATE, 0x1f01f, (1<<25) | pstate | (pstate << 12))
+    p.mask64(CREG[cluster] + CLUSTER_PSTATE, 0x1f01f, (1<<25) | pstate)
 
 print()
 
@@ -105,7 +110,7 @@ def bench_latency(cluster, cpu, from_pstate, to_pstate, verbose=False):
     bench_cpu(cpu)
 
     p.smp_call(cpu, util.timelog, logbuf, LOG_ITERS)
-    psreg = (p.read64(CREG[cluster] + CLUSTER_PSTATE) & ~0x1f001f) | (1<<25) | to_pstate | (to_pstate << 12)
+    psreg = (p.read64(CREG[cluster] + CLUSTER_PSTATE) & ~0x1f01f) | (1<<25) | to_pstate
     tval = p.call(util.signal_and_write, CREG[cluster] + CLUSTER_PSTATE, psreg)
     p.smp_wait(cpu)
     
