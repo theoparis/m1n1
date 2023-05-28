@@ -50,13 +50,24 @@ uint32_t psci_capabilities;
  * 
  * we will only be using clock gated mode for core sleeping - power gating is more efficient but causes issues.
  * 
+ * 
+ * MPIDR syntax for Apple SoCs from M1 onwards:
+ * 
+ * bits 31:24 - bit 31, RES1, not a hyperthreading system
+ * 
+ * bits 23:16 - aff2, set to 1 on the non-primary clusters, 0 on the primary cluster (the set of 2 cores)
+ * 
+ * bits 15:8 - aff1, (die_num * 8) + local_cluster_number, indicates what cluster we are on. (for a single die system this is die 0 always)
+ * 
+ * bits 7:0 - aff0, core_num on the local cluster.
+ * 
 */
 
 
 /**
  * Description:
  * 
- * This function powers off the desired node in the PSCI design hierarchy.
+ * This function powers off the desired node in the PSCI power domain tree hierarchy.
  * 
  * Return value:
  * - PSCI_SUCCESS if CPU powered off successfully.
@@ -64,7 +75,12 @@ uint32_t psci_capabilities;
 */
 int hv_psci_turn_off_cpu(void) {
    int retval = PSCI_SUCCESS; //assume success
-   int cluster_number = (mrs(MPIDR_EL1)) & 
+   int mpidr = mrs(MPIDR_EL1);
+   int cluster_number = mpidr & CLUSTER_NUMBER_MASK;
+   int core_number = mpidr & CORE_NUMBER_MASK;
+   int index = (cluster_number >> 6) + core_number + NUM_SYSTEMS_ACTIVE;
+
+   //do we need to do any poweroff early prep?
 
 
 }

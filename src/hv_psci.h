@@ -28,7 +28,9 @@
 #define PSCI_VERSION (PSCI_MAJOR_VER_1 | PSCI_MINOR_VER_1)
 #define SMC_64_FUNCTION BIT(30)
 #define PSCI_MAX_POWER_LEVEL 2U //corresponds to MPIDR Aff2 (this is how ARM Trusted Firmware defines it, it permits a on, standby, and off state)
-
+#define CLUSTER_NUMBER_MASK (0xff << 8)
+#define CORE_NUMBER_MASK 0xff
+#define NUM_SYSTEMS_ACTIVE 1
 /**
  * PSCI return values.
 */
