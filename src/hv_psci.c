@@ -31,18 +31,29 @@
 #include "string.h"
 #include "types.h"
 #include "uartproxy.h"
+#include "adt.h"
+#include "soc.h"
+
 
 uint32_t psci_capabilities;
 
+unsigned int psci_num_cores, psci_num_clusters;
+
+cpu_power_domain_node_t *psci_cpu_nodes;
+non_cpu_power_domain_node_t *psci_non_cpu_nodes;
+static platform_local_state_t *psci_requested_local_power_states[PSCI_MAX_POWER_LEVEL];
+spinlock_t *psci_locks;
+
 /**
- * Aside: Apple core topology will be defined as follows (NOTE: only for cores, pmgr peripherals are not accounted for) per ARM Trusted Firmware
+ * Aside: Apple core topology will be defined as follows (NOTE: only for cores/clusters/system, 
+ * pmgr peripherals are not accounted for) per ARM Trusted Firmware
  * requirements for PSCI.
  * 
  * Max power level - MPIDR (Aff2) (0 is run, 1 is low power, 2 is powerdown), system will always be in state 0
  * 
  * Number of nodes in power domain tree (aka clusters + cores):
  * 
- * <6-20> (number of cores) + <2-3> (number of clusters) + 1 (system power domain)
+ * <6-24> (number of cores) + <2-6> (number of clusters) + 1 (system power domain)
  * 
  * deepest power down state: OFF (aka affinity 2)
  * 
@@ -63,6 +74,111 @@ uint32_t psci_capabilities;
  * 
 */
 
+//
+// Description:
+// Initializes PSCI stack. Right now, it's only setting up the power domain tree.
+// 
+// Return value:
+// None.
+//
+void hv_psci_init(void) {
+    //
+    // Save number of cores/clusters for PSCI
+    // code to keep track of.
+    //
+    // We're using the Trusted Firmware-A implementation of PSCI code,
+    // and that implementation has number of cores and clusters per platform hardcoded.
+    // (as it's expected to be ported individually to each platform and all
+    // reference platforms typically have unchanging amounts of RAM/cores.)
+    // 
+    // Due to Apple SoCs having variable amounts of cores, and a different number of clusters
+    // depending on whether it's a "Pro" chip or not, we need to instead use variables and calculate this number
+    // of cores manually.
+    //
+    // For the cluster number, there are only three possiblities, so we can hardcode this per SoC "family"
+    // (standard M-series chips have two, "Pro"/"Max" chips have three (bootstrap, auxiliary P cores, auxiliary E cores)
+    // and "Ultra" chips have 6, since they are two "Max" dies interconnected together.)
+    //
+
+    int node = adt_path_offset(adt, "/cpus");
+    psci_num_cores = 1;
+    ADT_FOREACH_CHILD(adt, node) {
+        unsigned int cpu_identifier;
+        if(ADT_GETPROP(adt, node, "cpu-id", &cpu_identifier) < 0) {
+            continue;
+        }
+        psci_num_cores++;
+    }
+    printf("PSCI DEBUG: Number of cores for PSCI nodes is %d\n", psci_num_cores);
+
+    //
+    // Use Chip ID to determine number of clusters on the platform.
+    //
+    switch(chip_id) {
+        case T8103:
+        case T8112:
+            //
+            // Two clusters for standard M series chips, one for all P cores, one for all E cores.
+            //
+            psci_num_clusters = 2;
+            break;
+        case T6000:
+        case T6001:
+        case T6020:
+        case T6021:
+            //
+            // Three clusters for "Pro"/"Max" M series chips, bootstrap (two E-cores), auxiliary P-cores, auxiliary E-cores
+            //
+            psci_num_clusters = 3;
+            break;
+        case T6002:
+            //
+            // Six clusters for two-die SoCs, 2 * 3 clusters per "Max" die.
+            //
+            psci_num_clusters = 6;
+            break;
+    }
+    psci_cpu_nodes = malloc((psci_num_cores * sizeof(cpu_power_domain_node_t)));
+    psci_non_cpu_nodes = malloc((psci_num_clusters + NUM_SYSTEMS_ACTIVE) * sizeof(non_cpu_power_domain_node_t));
+    for(int i = 0; i < PSCI_MAX_POWER_LEVEL; i++) {
+      psci_requested_local_power_states[i] = malloc((psci_num_cores * sizeof(platform_local_state_t)));
+    }
+    psci_locks = malloc(((psci_num_clusters + NUM_SYSTEMS_ACTIVE) * sizeof(spinlock_t)));
+
+}
+
+/**
+ * Description:
+ * 
+ * This function constructs the PSCI power state to turn off at all levels.
+ * 
+ * Return value:
+ *    None.
+*/
+
+static void hv_psci_construct_poweroff_state(psci_power_state_status_t *state_info) {
+   for(unsigned int level = 0; level <= PSCI_MAX_POWER_LEVEL; level++) {
+      state_info->power_domain_state[level] = PSCI_OFF_STATE;
+   }
+}
+
+
+/**
+ * Description:
+ * 
+ * This function gets the parent nodes that are tied to a given CPU index.
+ * 
+ * Return value:
+ *    None.
+*/
+
+static void hv_psci_get_parent_nodes(unsigned int cpu_index, unsigned int end_power_level, unsigned int *node_index) {
+   unsigned int *node = node_index;
+   unsigned int parent_node = parent_ndoe1;
+   for(unsigned int i = 1; i <= end_power_level; i++) {
+
+   }
+}
 
 /**
  * Description:
@@ -79,10 +195,23 @@ int hv_psci_turn_off_cpu(void) {
    int cluster_number = mpidr & CLUSTER_NUMBER_MASK;
    int core_number = mpidr & CORE_NUMBER_MASK;
    int index = (cluster_number >> 6) + core_number + NUM_SYSTEMS_ACTIVE;
+   psci_power_state_status_t power_state_info;
+   unsigned int parent_nodes[PSCI_MAX_POWER_LEVEL] = {0};
+   //
+   // Step 0 - construct the power off state info.
+   //
+   hv_psci_construct_poweroff_state(&power_state_info);
 
    //do we need to do any poweroff early prep?
+   //if needed, add later.
 
+   //Step 1 - gather parent nodes of cpu to be powered down
 
+   //step 2 - acquire spinlocks
+
+   //step 3 - negotiate power states.
+
+   //step 4 - 
 }
 
 /**
