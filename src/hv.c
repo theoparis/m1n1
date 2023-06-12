@@ -80,7 +80,7 @@ void hv_init(void)
 
     //set up a HACR bit (56)
     uint64_t hacr_val = mrs(HACR_EL2);
-    hacr_val |= BIT(26);
+    hacr_val |= BIT(56);
     msr(HACR_EL2, hacr_val);
 
     // Compute tick interval
