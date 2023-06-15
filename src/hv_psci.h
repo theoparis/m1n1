@@ -34,6 +34,7 @@
 #define PSCI_ON_STATE 0
 #define PSCI_RETENTION_STATE 1
 #define PSCI_OFF_STATE 2
+#define PSCI_CPU_POWER_LEVEL 0U
 
 //
 // PSCI return values.
@@ -58,6 +59,16 @@
 #define PSCI_CPU_ON_ARM32_FUNCTION_ID 0x84000003
 #define PSCI_SYSTEM_POWEROFF_FUNCTION_ID 0x84000008
 #define PSCI_SYSTEM_RESET_FUNCTION_ID 0x84000009
+
+//
+// PSCI enums.
+//
+
+typedef enum {
+    AFFINITY_STATE_ON = 0U,
+    AFFINITY_STATE_OFF = 1U,
+    AFFINITY_STATE_ON_PENDING = 2U
+} affinity_info_state_t;
 
 //
 // PSCI typedefs and structs.
@@ -129,5 +140,14 @@ typedef struct psci_non_cpu_power_domain_node {
     uint16_t lock_index;
 
 } non_cpu_power_domain_node_t;
+
+//
+// Struct for holding per CPU information for PSCI code.
+//
+typedef struct psci_per_cpu_data {
+    affinity_info_state_t affinity_state;
+    unsigned int target_power_level;
+    platform_local_state_t local_cpu_state;
+} psci_per_cpu_data_t;
 
 #endif //HV_PSCI_H

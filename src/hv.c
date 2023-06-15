@@ -83,6 +83,11 @@ void hv_init(void)
     hacr_val |= BIT(56);
     msr(HACR_EL2, hacr_val);
 
+    //
+    // m1n1_windows change: initialize PSCI.
+    //
+    hv_psci_init();
+
     // Compute tick interval
     hv_tick_interval = mrs(CNTFRQ_EL0) / HV_TICK_RATE;
 

@@ -112,4 +112,10 @@ void hv_rearm(void);
 void hv_maybe_exit(void);
 void hv_tick(struct exc_info *ctx);
 
+//
+// PSCI init
+//
+
+void hv_psci_init(void);
+
 #endif
