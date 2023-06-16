@@ -249,6 +249,62 @@ platform_local_state_t hv_psci_get_target_power_state(unsigned int level, const 
 
 //
 // Description:
+// Get non-CPU power domain local state.
+//
+// Return value:
+//    Local state of requested non-CPU power domain node.
+//
+static platform_local_state_t hv_psci_get_non_cpu_power_domain_local_state(unsigned int parent_index) {
+   dc_civac_range(&psci_non_cpu_nodes[parent_index], sizeof(psci_non_cpu_nodes[parent_index]));
+   return psci_non_cpu_nodes[parent_index].local_power_state;
+}
+
+//
+// Description:
+// Update non-CPU power domain local state.
+//
+// Return value:
+//    None.
+//
+static void hv_psci_set_non_cpu_power_domain_node_local_state(unsigned int parent_index, platform_local_state_t state) {
+   psci_non_cpu_nodes[parent_index].local_power_state = state;
+   //
+   // Flush and invalidate caches here for safety in case we're not cache coherent.
+   //
+   dc_civac_range((void *)&psci_non_cpu_nodes[parent_index], sizeof(psci_non_cpu_nodes[parent_index]));
+
+}
+
+//
+// Description:
+// Helper function to set per-CPU local state to a desired state.
+// 
+// Return value:
+//    None.
+//
+
+static void hv_psci_set_cpu_local_state(platform_local_state_t desired_state) {
+   psci_cpu_data_array[mrs(TPIDR_EL2)].local_cpu_state = desired_state;
+}
+
+//
+// Description:
+// Helper function to find the highest power level that will be turned off.
+//
+// Return value:
+//    Highest power level to be powered down.
+//
+unsigned int hv_psci_find_max_off_level(const psci_power_state_status_t *state_info) {
+   for(int i = PSCI_MAX_POWER_LEVEL; i >= PSCI_CPU_POWER_LEVEL; i--) {
+      int result = (((state_info->power_domain_state[i]) > PSCI_MAX_RETENTION_STATE) && ((state_info->power_domain_state[i]) <= PSCI_MAX_OFF_STATE)) ? 1 : 0;
+      if(result != 0) {
+         return (unsigned int)i;
+      }
+   }
+}
+
+//
+// Description:
 // Helper that sets the target local power state to be entered by power domains from current CPU to ancestor.
 // Must be called after coordination of power states.
 //
@@ -261,6 +317,21 @@ static void hv_psci_set_target_local_power_states(unsigned int end_power_level, 
    const platform_local_state_t *power_domain_state = target_state->power_domain_state;
 
    hv_psci_set_cpu_local_state(power_domain_state[PSCI_CPU_POWER_LEVEL]);
+
+   //
+   // Flush data caches to prevent weirdness with cached local states.
+   //
+   dc_civac_range(&psci_cpu_data_array[mrs(TPIDR_EL2)].local_cpu_state, sizeof(psci_cpu_data_array[mrs(TPIDR_EL2)].local_cpu_state));
+
+   parent_index = psci_cpu_nodes[hv_psci_get_core_position()].parent_node;
+
+   //
+   // Copy local state over from the state info array.
+   //
+   for(level = 1; level <= end_power_level; level++) {
+      hv_psci_set_non_cpu_power_domain_node_local_state(parent_index, power_domain_state[level]);
+      parent_index = psci_non_cpu_nodes[parent_index].parent_node;
+   }
 }
 
 void hv_psci_coordinate_power_states(unsigned int end_power_level, psci_power_state_status_t *current_state_info) {
@@ -327,6 +398,27 @@ static void hv_psci_get_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_n
    spin_lock(&psci_locks[non_cpu_power_domain_node->lock_index]);
 }
 
+//
+// Description:
+// This function does the architectural preparation to power down the CPU.
+//
+// Return value:
+// None.
+//
+
+void hv_psci_power_down_cpu_maintenance(unsigned int power_level) {
+   //
+   // Disable data caching.
+   //
+   uint64_t sctlr_old = read_sctlr();
+   uint64_t sctlr_cache_disable = sctlr_old & ~(SCTLR_C);
+   write_sctlr(sctlr_cache_disable);
+
+   //
+   // TODO: add power off prep code here.
+   //
+}
+
 /**
  * Description:
  * This function constructs the PSCI power state to turn off at all levels.
@@ -364,6 +456,8 @@ static void hv_psci_acquire_power_domain_tree_locks(unsigned int end_power_level
       hv_psci_get_lock(&psci_non_cpu_nodes[parent_index]);
    }
 }
+
+
 
 /**
  * Description:
@@ -418,7 +512,8 @@ int hv_psci_turn_off_cpu(void) {
    //step 3 - negotiate power states.
    hv_psci_coordinate_power_states(PSCI_MAX_POWER_LEVEL, &power_state_info);
 
-   //step 4 - 
+   //step 4 - prepare for powering off the CPU.
+   hv_psci_power_down_cpu_maintenance(hv_psci_find_max_off_level(&power_state_info));
 }
 
 /**

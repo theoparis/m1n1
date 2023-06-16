@@ -35,6 +35,8 @@
 #define PSCI_RETENTION_STATE 1
 #define PSCI_OFF_STATE 2
 #define PSCI_CPU_POWER_LEVEL 0U
+#define PSCI_MAX_RETENTION_STATE 1U
+#define PSCI_MAX_OFF_STATE 2U
 
 //
 // PSCI return values.
@@ -149,5 +151,50 @@ typedef struct psci_per_cpu_data {
     unsigned int target_power_level;
     platform_local_state_t local_cpu_state;
 } psci_per_cpu_data_t;
+
+//
+// PSCI function prototypes.
+//
+
+//
+// Nothing right now.
+//
+
+//
+// Miscellaneous defines.
+//
+
+#define PAGE_SIZE       0x4000
+#define CACHE_LINE_SIZE 64
+
+#define CACHE_RANGE_OP(func, op)                                                                   \
+    void func(void *addr, size_t length)                                                           \
+    {                                                                                              \
+        u64 p = (u64)addr;                                                                         \
+        u64 end = p + length;                                                                      \
+        while (p < end) {                                                                          \
+            cacheop(op, p);                                                                        \
+            p += CACHE_LINE_SIZE;                                                                  \
+        }                                                                                          \
+    }
+
+CACHE_RANGE_OP(ic_ivau_range, "ic ivau")
+CACHE_RANGE_OP(dc_ivac_range, "dc ivac")
+CACHE_RANGE_OP(dc_zva_range, "dc zva")
+CACHE_RANGE_OP(dc_cvac_range, "dc cvac")
+CACHE_RANGE_OP(dc_cvau_range, "dc cvau")
+CACHE_RANGE_OP(dc_civac_range, "dc civac")
+
+static inline u64 read_sctlr(void)
+{
+    sysop("isb");
+    return mrs(SCTLR_EL1);
+}
+
+static inline void write_sctlr(u64 val)
+{
+    msr(SCTLR_EL1, val);
+    sysop("isb");
+}
 
 #endif //HV_PSCI_H
