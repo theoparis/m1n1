@@ -1158,9 +1158,10 @@ int hv_psci_suspend_cpu(uint64_t power_state, uint64_t cpu_reentry_addr, uint64_
       cpu_power_domain_state = power_state_info.power_domain_state[PSCI_CPU_POWER_LEVEL];
       hv_psci_set_cpu_local_state(cpu_power_domain_state);
       //
-      // Actually put the CPU in standby mode. (For now we're doing deep WFI sleep)
+      // Actually put the CPU in standby mode. (For now we're doing shallow WFI sleep)
       //
-      deep_wfi();
+      sysop("isb");
+      __asm__ ("wfi");
 
       //
       // When exiting standby, set state back to ON state.
@@ -1181,6 +1182,7 @@ int hv_psci_suspend_cpu(uint64_t power_state, uint64_t cpu_reentry_addr, uint64_
    // Actually begin performing the suspend operation.
    //
    retval = hv_psci_start_cpu_suspend(&entry_point, target_power_level, &power_state_info, is_power_down_state);
+   return retval;
 
 }
 
