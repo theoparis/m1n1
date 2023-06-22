@@ -16,6 +16,11 @@ void _gxf_init(void *gl2_stack, void *gl1_stack);
 u8 *gl1_stack[MAX_CPUS];
 u8 *gl2_stack[MAX_CPUS];
 
+//
+// m1n1_windows TODO: load ARM Trusted Firmware-A in GXF mode and run it from there.
+// Required for bare metal PSCI support. (in particular if Hyper-V is to be a supported thing.)
+//
+
 void gxf_init(void)
 {
     int cpu = smp_id();

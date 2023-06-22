@@ -27,30 +27,54 @@
 
 #define PSCI_VERSION (PSCI_MAJOR_VER_1 | PSCI_MINOR_VER_1)
 #define SMC_64_FUNCTION BIT(30)
-#define PSCI_MAX_POWER_LEVEL 2U //corresponds to MPIDR Aff2 (this is how ARM Trusted Firmware defines it, it permits a on, standby, and off state)
+//
+// A max power level of 2 corresponds to MPIDR Aff2 (this is how ARM Trusted Firmware defines it, it permits control of core, cluster, and system power states.)
+//
+#define PSCI_CPU_POWER_LEVEL 0U
+#define PSCI_CLUSTER_POWER_LEVEL 1U
+#define PSCI_MAX_POWER_LEVEL 2U
 #define CLUSTER_NUMBER_MASK (0xff << 8)
 #define CORE_NUMBER_MASK 0xff
 #define NUM_SYSTEMS_ACTIVE 1
-#define PSCI_ON_STATE 0
-#define PSCI_RETENTION_STATE 1
-#define PSCI_OFF_STATE 2
-#define PSCI_CPU_POWER_LEVEL 0U
+#define PSCI_ON_STATE 0U
+//
+// Clusters do not support retention/standby power state.
+//
+#define PSCI_IDLE_STANDBY_STATE 1U
+#define PSCI_OFF_STATE 2U
+//
+// cannot power manage above level 2, aka the system itself.
+//
+#define PSCI_INVALID_LEVEL 3U
+
 #define PSCI_MAX_RETENTION_STATE 1U
 #define PSCI_MAX_OFF_STATE 2U
+#define PSCI_STATE_VALID_MASK 0xB0000000U
+#define PSCI_STATE_TYPE_MASK 0x1U
+#define PSCI_STATE_TYPE_SHIFT 30U
+#define PSCI_STATE_ID_MASK 0xFFFFFFFU
+#define PSCI_STATE_ID_SHIFT 0U
+#define PSCI_POWER_STATE_TYPE_STANDBY 0x0U
+#define PSCI_POWER_STATE_TYPE_POWERDOWN 0x1U
+//
+// Next two macros from Trusted Firmware-A verbatim, from the QEMU SBSA platform.
+//
+#define PLAT_LOCAL_PSTATE_WIDTH		4
+#define PLAT_LOCAL_PSTATE_MASK		((1 << PLAT_LOCAL_PSTATE_WIDTH) - 1)
 
 //
 // PSCI return values.
 //
-#define PSCI_SUCCESS 0
-#define PSCI_NOT_SUPPORTED -1
-#define PSCI_INVALID_PARAMETERS -2
-#define PSCI_OPERATION_DENIED -3
-#define PSCI_ALREADY_ON -4
-#define PSCI_ON_PENDING -5
-#define PSCI_INTERNAL_FAILURE -6
-#define PSCI_NOT_PRESENT -7
-#define PSCI_DISABLED -8
-#define PSCI_INVALID_ADDRESS -9
+#define PSCI_STATUS_SUCCESS 0
+#define PSCI_STATUS_NOT_SUPPORTED -1
+#define PSCI_STATUS_INVALID_PARAMETERS -2
+#define PSCI_STATUS_OPERATION_DENIED -3
+#define PSCI_STATUS_ALREADY_ON -4
+#define PSCI_STATUS_ON_PENDING -5
+#define PSCI_STATUS_INTERNAL_FAILURE -6
+#define PSCI_STATUS_NOT_PRESENT -7
+#define PSCI_STATUS_DISABLED -8
+#define PSCI_STATUS_INVALID_ADDRESS -9
 
 //
 // PSCI function IDs.
@@ -109,6 +133,12 @@ typedef struct psci_cpu_power_domain_node {
     spinlock_t lock_for_cpu;
 } cpu_power_domain_node_t;
 
+typedef enum platform_local_state_type {
+	STATE_TYPE_RUN = 0,
+	STATE_TYPE_RETN,
+	STATE_TYPE_OFF
+} platform_local_state_type_t;
+
 //
 // Struct describing a non-CPU power domain node.
 // Implementation is the one used in Trusted Firmware-A.
@@ -150,40 +180,133 @@ typedef struct psci_per_cpu_data {
     affinity_info_state_t affinity_state;
     unsigned int target_power_level;
     platform_local_state_t local_cpu_state;
+    //
+    // To know which CPU we are, according to how Apple hardware understands core position.
+    //
+    unsigned int cpu_index;
+    unsigned int cluster_index;
+    unsigned int die_index;
+    //
+    // The "reg" value of a core, aka the lower two bytes of it's MPIDR index.
+    //
+    unsigned int reg_value;
+    //
+    // The index of the core *locally* within a cluster.
+    //
+    unsigned int local_core_number;
 } psci_per_cpu_data_t;
+
+typedef struct parameter_header {
+    uint8_t type;
+    uint8_t version;
+    uint16_t size;
+    uint32_t attributes;
+} parameter_header_t;
+
+typedef struct aarch64_syscall_args {
+	uint64_t arg0;
+	uint64_t arg1;
+	uint64_t arg2;
+	uint64_t arg3;
+	uint64_t arg4;
+	uint64_t arg5;
+	uint64_t arg6;
+	uint64_t arg7;
+} aarch64_syscall_args_t;
+
+typedef struct entry_point_info {
+    parameter_header_t header;
+    unsigned long long pc;
+    uint32_t spsr;
+    aarch64_syscall_args_t arguments;
+} entry_point_info_t;
 
 //
 // PSCI function prototypes.
 //
 
+unsigned int hv_psci_get_core_position(void);
+
 //
-// Nothing right now.
+// The following macros are taken from Trusted Firmware-A to support extended state IDs and sanitize for valid idle power states.
 //
+
+#define apple_make_pwrstate_lvl0(lvl0_state, pwr_lvl, type) \
+		(((lvl0_state) << PSCI_STATE_ID_SHIFT) | ((type) << PSCI_STATE_TYPE_SHIFT))
+
+#define apple_make_pwrstate_lvl1(lvl1_state, lvl0_state, pwr_lvl, type) \
+		(((lvl1_state) << PLAT_LOCAL_PSTATE_WIDTH) | \
+		apple_make_pwrstate_lvl0(lvl0_state, pwr_lvl, type))
+
+#define apple_make_pwrstate_lvl2(lvl2_state, lvl1_state, lvl0_state, pwr_lvl, type) \
+		(((lvl2_state) << (PLAT_LOCAL_PSTATE_WIDTH * 2)) | \
+		apple_make_pwrstate_lvl1(lvl1_state, lvl0_state, pwr_lvl, type))
+
+
+//
+// Helper functions to test for a particular power state. Taken verbatim from Trusted Firmware-A.
+//
+
+static inline int hv_psci_is_local_state_run(unsigned int plat_local_state)
+{
+	return (plat_local_state == PSCI_ON_STATE) ? 1 : 0;
+}
+
+
+static inline int hv_psci_is_local_state_retn(unsigned int plat_local_state)
+{
+	return ((plat_local_state > PSCI_ON_STATE) &&
+		(plat_local_state <= PSCI_IDLE_STANDBY_STATE)) ? 1 : 0;
+}
+
+
+static inline int hv_psci_is_local_state_off(unsigned int plat_local_state)
+{
+	return ((plat_local_state > PSCI_IDLE_STANDBY_STATE) &&
+		(plat_local_state <= PSCI_OFF_STATE)) ? 1 : 0;
+}
+
+static inline bool hv_psci_is_cpu_standby_requested(unsigned int is_power_down_state,
+				      unsigned int retention_lvl)
+{
+	return (is_power_down_state == 0U) && (retention_lvl == 0U);
+}
 
 //
 // Miscellaneous defines.
 //
 
-#define PAGE_SIZE       0x4000
-#define CACHE_LINE_SIZE 64
+#define SPSR_MODE_RW_SHIFT 0x4U
+#define SPSR_MODE_EL_MASK 0x3U
+#define SPSR_MODE_EL_SHIFT 0x2U
+#define SPSR_MODE_SP_SHIFT 0x0U
+#define SPSR_MODE_SP_MASK 0x1U
+#define SPSR_MODE_SP_EL0 0x0U
+#define SPSR_MODE_SP_ELX 0x1U
+#define SPSR_DAIF_MASK 0xFU
+#define SPSR_DAIF_SHIFT 0x6U
+#define SPSR_SSBS_BIT_AARCH64 BIT(12)
+#define SPSR_FIQ_BIT BIT(0)
+#define SPSR_IRQ_BIT BIT(1)
+#define SPSR_ABT_BIT BIT(2)
+#define SPSR_DAIF_DISABLE_ALL_EXCEPTIONS (SPSR_FIQ_BIT | SPSR_FIQ_BIT | SPSR_ABT_BIT);
 
-#define CACHE_RANGE_OP(func, op)                                                                   \
-    void func(void *addr, size_t length)                                                           \
-    {                                                                                              \
-        u64 p = (u64)addr;                                                                         \
-        u64 end = p + length;                                                                      \
-        while (p < end) {                                                                          \
-            cacheop(op, p);                                                                        \
-            p += CACHE_LINE_SIZE;                                                                  \
-        }                                                                                          \
-    }
+#define SPSR_64(el, sp, daif)					\
+	(((0 << SPSR_MODE_RW_SHIFT) |			\
+	(((el) & SPSR_MODE_EL_MASK) << SPSR_MODE_EL_SHIFT) |		\
+	(((sp) & SPSR_MODE_SP_MASK) << SPSR_MODE_SP_SHIFT) |		\
+	(((daif) & SPSR_DAIF_MASK) << SPSR_DAIF_SHIFT)) &	\
+	(~(SPSR_SSBS_BIT_AARCH64)))
 
-CACHE_RANGE_OP(ic_ivau_range, "ic ivau")
-CACHE_RANGE_OP(dc_ivac_range, "dc ivac")
-CACHE_RANGE_OP(dc_zva_range, "dc zva")
-CACHE_RANGE_OP(dc_cvac_range, "dc cvac")
-CACHE_RANGE_OP(dc_cvau_range, "dc cvau")
-CACHE_RANGE_OP(dc_civac_range, "dc civac")
+#define PARAMETER_ENTRY_POINT 0x01U;
+
+#define CPU_START_OFF_T8103 0x54000
+#define CPU_START_OFF_T8112 0x34000
+#define CPU_START_OFF_T6020 0x28000
+
+#define CPU_REG_CORE    GENMASK(7, 0)
+#define CPU_REG_CLUSTER GENMASK(10, 8)
+#define CPU_REG_DIE     GENMASK(14, 11)
 
 static inline u64 read_sctlr(void)
 {
