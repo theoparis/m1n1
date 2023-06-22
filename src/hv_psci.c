@@ -264,6 +264,25 @@ void hv_psci_init(void) {
     psci_num_clusters, 
     NUM_SYSTEMS_ACTIVE);
 
+    //
+    // Initialize PSCI capabilities.
+    //
+
+    //
+    // For now we're only going to support the cpu on, off, suspend, and memory protection capabilities.
+    //
+    psci_capabilities = PSCI_GENERIC_CAPABILITY;
+    psci_capabilities |= define_psci_cap(PSCI_CPU_OFF_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_CPU_ON_ARM64_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_CPU_ON_ARM32_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_SUSPEND_CPU_ARM32_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_SUSPEND_CPU_ARM64_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_SYSTEM_POWEROFF_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_MEM_PROTECT_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_MEM_CHECK_RANGE_ARM32_FUNCTION_ID);
+    psci_capabilities |= define_psci_cap(PSCI_MEM_CHECK_RANGE_ARM64_FUNCTION_ID);
+
+
 
 }
 
@@ -877,7 +896,7 @@ int hv_psci_turn_off_cpu(void) {
  * - PSCI_SUCCESS if CPU powered on successfully.
  * - PSCI_OPERATION_DENIED if an error occurred.
 */
-int hv_psci_turn_on_cpu(void) {
+int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t context_id) {
    int retval = PSCI_STATUS_SUCCESS; //assume success
 
 }
@@ -1186,6 +1205,63 @@ int hv_psci_suspend_cpu(uint64_t power_state, uint64_t cpu_reentry_addr, uint64_
 
 }
 
+//
+// Description:
+// Reboots the entire system. As simple as it sounds.
+// This function should not return.
+//
+// Return value:
+// N/A
+//
+void hv_psci_reset_system(void) {
+   iodev_console_flush();
+   //
+   // TODO: replace this placeholder reboot with a poweroff.
+   //
+   reboot();
+}
+
+//
+// Description:
+// Turns off the entire system. As simple as it sounds.
+// This function should not return.
+//
+// Return value:
+// N/A
+//
+void hv_psci_turn_off_system(void) {
+   flush_and_reboot();
+}
+
+//
+// Description:
+// Returns if the feature is supported.
+//
+// Return value:
+// PSCI_STATUS_SUCCESS if supported, PSCI_STATUS_NOT_SUPPORTED otherwise.
+//
+int hv_psci_features(unsigned int psci_function_id) {
+   unsigned int local_capabilities = psci_capabilities;
+   if(psci_function_id == SMCCC_VERSION) {
+      return PSCI_STATUS_SUCCESS;
+   }
+   //
+   // Check if it's a 64bit function.
+   //
+   if(((psci_function_id >> 30) & 1) == 1) {
+      local_capabilities = local_capabilities & PSCI_CAP_64BIT_MASK;
+   }
+
+   //
+   // TODO: add sanity check on invalid function IDs.
+   //
+
+   if((local_capabilities & define_psci_cap(psci_function_id)) == 0) {
+      return PSCI_STATUS_NOT_SUPPORTED;
+   }
+   return PSCI_STATUS_SUCCESS;
+}
+
 static bool hv_handle_psci_smc(struct exc_info *ctx) {
    uint64_t psci_func_id = ctx->regs[0]; //PSCI function ID to be called will always be in X0.
 
@@ -1224,14 +1300,35 @@ static bool hv_handle_psci_smc(struct exc_info *ctx) {
             ctx->regs[0] = PSCI_VERSION;
             break;
          case PSCI_SUSPEND_CPU_ARM32_FUNCTION_ID:
-            int ret = hv_psci_suspend_cpu(ctx->regs[1], ctx->regs[2], ctx->regs[3]);
+            int ret = hv_psci_suspend_cpu(w1, w2, w3);
             ctx->regs[0] = ret;
-            break;
+            break; 
          case PSCI_CPU_OFF_FUNCTION_ID:
             int retval = hv_psci_turn_off_cpu();
             break;
          case PSCI_CPU_ON_ARM32_FUNCTION_ID:
-            int retval = hv_psci_turn_on_cpu(ctx->regs[1], ctx->regs[2], ctx->regs[3]);
+            int retval = hv_psci_turn_on_cpu(w1, w2, w3);
+            break;
+         case PSCI_SYSTEM_POWEROFF_FUNCTION_ID:
+            hv_psci_turn_off_system();
+            //
+            // We don't return from this.
+            //
+         case PSCI_SYSTEM_RESET_FUNCTION_ID:
+            hv_psci_reset_system();
+            //
+            // We don't return from this.
+            //
+         case PSCI_FEATURES_FUNCTION_ID:
+            int retval = hv_psci_features(w1);
+            ctx->regs[0] = retval;
+            break;
+         case PSCI_MEM_PROTECT_FUNCTION_ID:
+            int retval = hv_psci_mem_protect(w1);
+         case PSCI_MEM_CHECK_RANGE_ARM32_FUNCTION_ID:
+         default:
+            printf("PSCI DEBUG: function not supported\n");
+            ctx->regs[0] = PSCI_STATUS_NOT_SUPPORTED;
             break;
 
       }
