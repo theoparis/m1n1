@@ -22,6 +22,11 @@
 // Enable SMMU abstraction layer to expose a fake SMMU to the guest which will redirect writes to the host IOMMU in a compatible manner
 // #define ENABLE_SMMU
 
+//
+// Use PSCI to turn on the CPUs in earnest rather than just setting up the spintables that m1n1 uses.
+//
+// #define PSCI_POWER_ON_CPUS_ENABLE
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 # ifdef CHAINLOADING

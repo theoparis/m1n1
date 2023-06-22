@@ -455,15 +455,7 @@ static platform_local_state_t *hv_psci_get_requested_local_power_states(unsigned
    }
 }
 
-//
-// Description:
-// Coordinates the platform specific local power states requested by each CPU and returns
-// the coordinated state.
-// TODO: Check if we need to do platform specific things here.
-//
-// Return value:
-//    Target power state after coordination.
-//
+
 platform_local_state_t hv_psci_get_target_power_state(unsigned int level, const platform_local_state_t *states, unsigned int num_cpu_siblings) {
    platform_local_state_t target_state = PSCI_OFF_STATE, temp;
    const platform_local_state_t *state1 = states;
@@ -569,6 +561,16 @@ static void hv_psci_set_target_local_power_states(unsigned int end_power_level, 
       parent_index = psci_non_cpu_nodes[parent_index].parent_node;
    }
 }
+
+//
+// Description:
+// Coordinates the platform specific local power states requested by each CPU and returns
+// the coordinated state.
+// TODO: Check if we need to do platform specific things here.
+//
+// Return value:
+//    Target power state after coordination.
+//
 
 void hv_psci_coordinate_power_states(unsigned int end_power_level, psci_power_state_status_t *current_state_info) {
    unsigned int level, parent_index, cpu_index = hv_psci_get_core_position();
@@ -855,10 +857,9 @@ int hv_psci_turn_off_cpu(void) {
       hv_psci_set_affinity_info_state(AFFINITY_STATE_OFF);
       sysop("dsb ish");
       dc_ivac_range((void *)&psci_cpu_data_array[index].affinity_state, sizeof(affinity_info_state_t));
+
       //
-      // Temporary ifdef: Try to prepare a total CPU sleep when PSCI CPU off is called.
-      // If this turns out to not be viable, remove the ifdef dependent code and instead do
-      // "deep WFI" sleep instead.
+      // Request the CPU to be stopped upon entering a deep sleep.
       //
       unsigned int cpu_start_addr_base = adt_pmgr_reg + cpu_start_off;
       unsigned int die_num = psci_cpu_data_array[index].die_index;
@@ -884,20 +885,6 @@ int hv_psci_turn_off_cpu(void) {
    }
    return retval;
 
-
-}
-
-/**
- * Description:
- * 
- * This function powers on the core.
- * 
- * Return value:
- * - PSCI_SUCCESS if CPU powered on successfully.
- * - PSCI_OPERATION_DENIED if an error occurred.
-*/
-int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t context_id) {
-   int retval = PSCI_STATUS_SUCCESS; //assume success
 
 }
 
@@ -928,7 +915,7 @@ int hv_psci_validate_entry_point(entry_point_info_t *entry_point, unsigned long 
    int retval;
    uint64_t entry_point_attr, sctlr;
    unsigned int daif;
-   const unsigned int el_mode = 0x2; //EL2 mode.
+   const unsigned long el_mode = 0x2; //EL2 mode.
    uint64_t hcr_el2 = mrs(HCR_EL2);
    sctlr = read_sctlr();
    entry_point_attr = 0x1U; //corresponds to "not secure bit" set, which is unimportant on Apple platforms, but better safe than sorry since TF-A sets it.
@@ -940,8 +927,66 @@ int hv_psci_validate_entry_point(entry_point_info_t *entry_point, unsigned long 
    entry_point->pc = cpu_reentry_addr;
    memset(&entry_point->arguments, 0, sizeof(entry_point->arguments));
    entry_point->arguments.arg0 = context;
-   entry_point->spsr = SPSR_64((uint64_t)el_mode, SPSR_MODE_SP_ELX, SPSR_DAIF_DISABLE_ALL_EXCEPTIONS);
+   entry_point->spsr = SPSR_64(el_mode, SPSR_MODE_SP_ELX, SPSR_DAIF_DISABLE_ALL_EXCEPTIONS);
    return PSCI_STATUS_SUCCESS;
+
+}
+
+int hv_psci_validate_mpidr_exists(uint64_t mpidr) {
+   for(int i = 0; i < MAX_CPUS; i++) {
+      //
+      // Iterate through the cpu power domain nodes, if we find the MPIDR in here, return success.
+      //
+      unsigned long mpidr_to_test = psci_cpu_nodes[i].mpidr;
+      if(mpidr == mpidr_to_test) {
+         return PSCI_STATUS_SUCCESS;
+      }
+   }
+   return PSCI_STATUS_INVALID_PARAMETERS;
+}
+
+/**
+ * Description:
+ * 
+ * This function powers on the core.
+ * 
+ * Return value:
+ * - PSCI_SUCCESS if CPU powered on successfully.
+ * - PSCI_OPERATION_DENIED if an error occurred.
+*/
+int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t context_id) {
+   //
+   // For now, only use this function for releasing the CPUs from the spintable that m1n1 sets up.
+   // Later on, when we're properly working on stuff, allow PSCI to power on the CPUs in earnest.
+   //
+   unsigned int cpu_identifier = hv_psci_get_core_position();
+   int retval = PSCI_STATUS_SUCCESS; //assume success
+#ifdef PSCI_POWER_ON_CPUS_ENABLE
+   entry_point_info_t entry_point_info;
+   //
+   // The target_cpu parameter is an MPIDR, check if it exists or not.
+   //
+   retval = hv_psci_validate_mpidr_exists(target_cpu);
+
+   //
+   // Validate and prepare the entry point.
+   //
+   retval = hv_psci_validate_entry_point(&entry_point_info, entry_point, context_id);
+#else
+
+   //
+   // Get the cpu-release-addr value, this is where the spinning CPU is looking for the entry point;
+   //
+   uint64_t release_addr = smp_get_release_addr(cpu_identifier);
+   //
+   // Write the entry point over and then wake the CPU.
+   //
+   write64(release_addr, entry_point);
+   dc_civac_range(release_addr, sizeof(uint64_t));
+   sysop("sev");
+   return retval;
+
+#endif
 
 }
 
@@ -1051,7 +1096,7 @@ static void hv_psci_finish_cpu_suspend(unsigned int cpu_index, unsigned int end_
 
    hv_psci_acquire_power_domain_tree_locks(end_power_level, parent_nodes);
 
-   hv_psci_get_target_power_state(end_power_level, &power_state_info);
+   hv_psci_get_target_local_power_states(end_power_level, &power_state_info);
 
    //
    // Set power domain state to ON state.
@@ -1262,6 +1307,36 @@ int hv_psci_features(unsigned int psci_function_id) {
    return PSCI_STATUS_SUCCESS;
 }
 
+//
+// Description:
+// Checks the specified memory range to see if it's protected by PSCI_MEM_PROTECT.
+// Currently a stub for now.
+//
+// Return value:
+// PSCI_STATUS_SUCCESS if the range is protected, PSCI_STATUS_OPERATION_DENIED otherwise.
+//
+int hv_psci_mem_protect_check_range(unsigned long long base, unsigned long length) {
+   return PSCI_STATUS_SUCCESS;
+}
+
+//
+// Description:
+// Returns the current status of PSCI memory protection and if asked for, enables it.
+//
+// Return value:
+//    0 if disabled, nonzero if enabled.
+//
+uint64_t psci_mem_protect(unsigned int enable_mem_protect) {
+   //
+   // Right now, since PSCI memory protection is mainly a concern against cold boot attacks,
+   // we can go without it for initial testing, as we'll need to persist something in NVRAM to properly enable it,
+   // and not sure how to *safely* write it.
+   //
+
+   return 0;
+   
+}
+
 static bool hv_handle_psci_smc(struct exc_info *ctx) {
    uint64_t psci_func_id = ctx->regs[0]; //PSCI function ID to be called will always be in X0.
 
@@ -1325,7 +1400,10 @@ static bool hv_handle_psci_smc(struct exc_info *ctx) {
             break;
          case PSCI_MEM_PROTECT_FUNCTION_ID:
             int retval = hv_psci_mem_protect(w1);
+            break;
          case PSCI_MEM_CHECK_RANGE_ARM32_FUNCTION_ID:
+            int retval = hv_psci_mem_protect_check_range(w1, w2);
+            break;
          default:
             printf("PSCI DEBUG: function not supported\n");
             ctx->regs[0] = PSCI_STATUS_NOT_SUPPORTED;
@@ -1339,6 +1417,19 @@ static bool hv_handle_psci_smc(struct exc_info *ctx) {
        * This is an SMC64 PSCI call. Leave X1, X2, X3 alone and proceed to see what function is
        * being requested by the SMC.
       */
+
+     switch(psci_func_id) {
+         case PSCI_SUSPEND_CPU_ARM64_FUNCTION_ID:
+            int ret = hv_psci_suspend_cpu(ctx->regs[1], ctx->regs[2], ctx->regs[3]);
+            ctx->regs[0] = ret;
+            break;
+         case PSCI_CPU_ON_ARM64_FUNCTION_ID:
+            int retval = hv_psci_turn_on_cpu(ctx->regs[1], ctx->regs[2], ctx->regs[3]);
+            break;
+         case PSCI_MEM_CHECK_RANGE_ARM64_FUNCTION_ID:
+            int retval = hv_psci_mem_protect_check_range(ctx->regs[1], ctx->regs[2]);
+            break;
+     }
    }
 
 
