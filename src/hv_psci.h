@@ -263,6 +263,48 @@ typedef struct entry_point_info {
 //
 
 unsigned int hv_psci_get_core_position(void);
+static unsigned int hv_psci_populate_power_domain_tree(const unsigned char *power_domain_tree_map);
+static void hv_psci_update_power_level_limits(void);
+static void hv_psci_get_parent_nodes(unsigned int cpu_index, unsigned int end_power_level, unsigned int *node_index);
+void hv_psci_init_requested_local_power_states(void);
+uint64_t psci_mem_protect(unsigned int enable_mem_protect);
+int hv_psci_mem_protect_check_range(unsigned long long base, unsigned long length);
+int hv_psci_features(unsigned int psci_function_id);
+void hv_psci_turn_off_system(void);
+void hv_psci_reset_system(void);
+int hv_psci_suspend_cpu(uint64_t power_state, uint64_t cpu_reentry_addr, uint64_t context);
+int hv_psci_start_cpu_suspend(const entry_point_info_t *entry_point, unsigned int end_power_level, psci_power_state_status_t *power_state_info, unsigned int is_power_down_state);
+static void hv_psci_finish_cpu_suspend(unsigned int cpu_index, unsigned int end_power_level);
+int hv_psci_validate_suspend_request(const psci_power_state_status_t *power_state_info, unsigned int is_power_down_state);
+void hv_psci_set_power_domains_to_on_state(unsigned int end_power_level);
+static void hv_psci_start_suspend_to_power_down(unsigned int end_power_level, const entry_point_info_t *entry_point, const psci_power_state_status_t *power_state_info);
+void hv_psci_build_saved_cpu_context(const entry_point_info_t *entry_point);
+int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t context_id);
+int hv_psci_validate_mpidr_exists(uint64_t mpidr);
+int hv_psci_validate_entry_point(entry_point_info_t *entry_point, unsigned long long cpu_reentry_addr, uint64_t context);
+unsigned int hv_psci_find_target_suspend_level(const psci_power_state_status_t *power_state_info);
+int hv_psci_turn_off_cpu(void);
+static void hv_psci_acquire_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
+static void hv_psci_release_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
+static void hv_psci_set_affinity_info_state(affinity_info_state_t state);
+void hv_psci_get_target_local_power_states(unsigned int end_power_level, psci_power_state_status_t *target_state);
+static platform_local_state_type_t hv_psci_power_state_categorize_type(platform_local_state_t state);
+static void hv_psci_construct_poweroff_state(psci_power_state_status_t *state_info);
+void hv_psci_power_down_cpu_maintenance(unsigned int power_level);
+static void hv_psci_get_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
+static void hv_psci_release_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
+void hv_psci_coordinate_power_states(unsigned int end_power_level, psci_power_state_status_t *current_state_info);
+static void hv_psci_set_target_local_power_states(unsigned int end_power_level, const psci_power_state_status_t *target_state);
+unsigned int hv_psci_find_max_off_level(const psci_power_state_status_t *state_info);
+static void hv_psci_set_cpu_local_state(platform_local_state_t desired_state);
+static void hv_psci_set_non_cpu_power_domain_node_local_state(unsigned int parent_index, platform_local_state_t state);
+static platform_local_state_t hv_psci_get_non_cpu_power_domain_local_state(unsigned int parent_index);
+platform_local_state_t hv_psci_get_target_power_state(unsigned int level, const platform_local_state_t *states, unsigned int num_cpu_siblings);
+static platform_local_state_t *hv_psci_get_requested_local_power_states(unsigned int power_level, unsigned int cpu_index);
+static void hv_psci_set_requested_local_power_state(unsigned int power_level, unsigned int cpu_index, platform_local_state_t requested_power_state);
+int hv_psci_validate_power_state(unsigned int power_state, psci_power_state_status_t *power_state_info);
+unsigned int hv_psci_translate_mpidr_to_cpu(unsigned int mpidr);
+
 
 //
 // The following macros are taken from Trusted Firmware-A to support extended state IDs and sanitize for valid idle power states.
@@ -309,6 +351,12 @@ static inline bool hv_psci_is_cpu_standby_requested(unsigned int is_power_down_s
 	return (is_power_down_state == 0U) && (retention_lvl == 0U);
 }
 
+static inline void hv_psci_lock_init(non_cpu_power_domain_node_t *non_cpu_pd_node,
+				  uint16_t index)
+{
+	non_cpu_pd_node[index].lock_index = index;
+}
+
 //
 // Miscellaneous defines.
 //
@@ -326,7 +374,7 @@ static inline bool hv_psci_is_cpu_standby_requested(unsigned int is_power_down_s
 #define SPSR_FIQ_BIT BIT(0)
 #define SPSR_IRQ_BIT BIT(1)
 #define SPSR_ABT_BIT BIT(2)
-#define SPSR_DAIF_DISABLE_ALL_EXCEPTIONS (SPSR_FIQ_BIT | SPSR_FIQ_BIT | SPSR_ABT_BIT);
+#define SPSR_DAIF_DISABLE_ALL_EXCEPTIONS (SPSR_FIQ_BIT | SPSR_FIQ_BIT | SPSR_ABT_BIT)
 
 #define SPSR_64(el, sp, daif)					\
 	(((0 << SPSR_MODE_RW_SHIFT) |			\
@@ -356,5 +404,19 @@ static inline void write_sctlr(u64 val)
     msr(SCTLR_EL1, val);
     sysop("isb");
 }
+
+#define T8103_NUM_CLUSTERS 2
+#define T8112_NUM_CLUSTERS 2
+#define T6000_NUM_CLUSTERS 3
+#define T6001_NUM_CLUSTERS T6000_NUM_CLUSTERS
+#define T6002_NUM_CLUSTERS T6001_NUM_CLUSTERS * 2
+#define T6020_NUM_CLUSTERS 3
+#define T6021_NUM_CLUSTERS T6020_NUM_CLUSTERS
+#define T8103_CORES_PER_CLUSTER 4
+#define T8112_CORES_PER_CLUSTER 4
+#define T600X_E_CLUSTER_CORE_COUNT 2
+#define T602X_E_CLUSTER_CORE_COUNT 4
+#define T600X_P_CLUSTER_CORE_COUNT 4
+#define T602X_P_CLUSTER_CORE_COUNT 4
 
 #endif //HV_PSCI_H

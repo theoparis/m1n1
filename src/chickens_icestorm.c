@@ -16,7 +16,7 @@ static void init_common_icestorm(void)
 
     // m1n1_windows change: as we're booting true UEFI/Windows, allow SMCs to be trapped to EL2 
     // (no EL3, and HCR_EL2.TSC is not writable on Apple platforms [it's role is taken over by this register])
-    //reg_clr(SYS_IMP_APL_EHID20, EHID20_TRAP_SMC);
+    reg_set(SYS_IMP_APL_EHID20, EHID20_TRAP_SMC);
 }
 
 void init_m1_icestorm(void)

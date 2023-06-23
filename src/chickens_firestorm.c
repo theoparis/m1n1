@@ -9,7 +9,7 @@ static void init_common_firestorm(void)
 
     // m1n1_windows change: as we're booting true UEFI/Windows, allow SMCs to be trapped to EL2 
     // (no EL3, and HCR_EL2.TSC is not writable on Apple platforms [it's role is taken over by this register])
-    //reg_clr(SYS_IMP_APL_HID1, HID1_TRAP_SMC);
+    reg_set(SYS_IMP_APL_HID1, HID1_TRAP_SMC);
 
     reg_clr(SYS_IMP_APL_HID3, HID3_DEV_PCIE_THROTTLE_ENABLE | HID3_DISABLE_ARBITER_FIX_BIF_CRD);
 

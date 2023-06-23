@@ -117,5 +117,6 @@ void hv_tick(struct exc_info *ctx);
 //
 
 void hv_psci_init(void);
+bool hv_handle_psci_smc(struct exc_info *ctx);
 
 #endif

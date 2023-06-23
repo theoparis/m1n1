@@ -588,6 +588,12 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
     return false;
 }
 
+static bool hv_handle_smc(struct exc_info *ctx) {
+    printf("PSCI SMC DEBUG: handling PSCI request 0x%lx", ctx->regs[0]);
+    bool handled_smc = hv_handle_psci_smc(ctx);
+    return handled_smc;
+}
+
 static bool hv_handle_msr(struct exc_info *ctx, u64 iss)
 {
     u64 reg = iss & (ESR_ISS_MSR_OP0 | ESR_ISS_MSR_OP2 | ESR_ISS_MSR_OP1 | ESR_ISS_MSR_CRn |
@@ -719,7 +725,7 @@ void hv_exc_sync(struct exc_info *ctx)
              * if this assumption ever breaks, change this code to a generic SMC handler.
             */
             hv_wdt_breadcrumb('s');
-            handled = hv_handle_psci_smc(ctx);
+            handled = hv_handle_smc(ctx);
             break;
     }
 

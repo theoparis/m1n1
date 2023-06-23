@@ -725,6 +725,9 @@ class HV(Reloadable):
         return True
 
     def handle_impdef(self, ctx):
+        if ctx.afsr1 == 0x1c00000:
+            # SMC trap
+            return self.handle_smc(ctx)
         if ctx.esr.ISS == 0x20:
             return self.handle_msr(ctx, ctx.afsr1)
 

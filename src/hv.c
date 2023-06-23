@@ -79,6 +79,7 @@ void hv_init(void)
     msr(VBAR_EL12, 0);
 
     //set up a HACR bit (56)
+    printf("DEBUG: setting up HACR\n");
     uint64_t hacr_val = mrs(HACR_EL2);
     hacr_val |= BIT(56);
     msr(HACR_EL2, hacr_val);
@@ -86,6 +87,7 @@ void hv_init(void)
     //
     // m1n1_windows change: initialize PSCI.
     //
+    printf("DEBUG: setting up PSCI\n");
     hv_psci_init();
 
     // Compute tick interval
