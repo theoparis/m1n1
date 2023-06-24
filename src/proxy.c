@@ -26,6 +26,7 @@
 #include "usb.h"
 #include "utils.h"
 #include "xnuboot.h"
+#include "hv_psci.h"
 
 #include "minilzlib/minlzma.h"
 #include "tinf/tinf.h"
@@ -507,6 +508,35 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_HV_ADD_TIME:
             hv_add_time(request->args[0]);
+            break;
+        case P_HV_PSCI_SUSPEND_CPU:
+            reply->retval =  hv_psci_suspend_cpu(request->args[0], request->args[1], request->args[2]);
+            break;
+        case P_HV_PSCI_TURN_OFF_CPU:
+            reply->retval = hv_psci_turn_off_cpu();
+            break;
+        case P_HV_PSCI_TURN_ON_CPU:
+            reply->retval = hv_psci_turn_on_cpu(request->args[0], request->args[1], request->args[2]);
+            break;
+        case P_HV_PSCI_TURN_OFF_SYSTEM:
+            hv_psci_turn_off_system();
+            //
+            // No return.
+            //
+            break;
+        case P_HV_PSCI_RESET_SYSTEM:
+            hv_psci_reset_system();
+            //
+            // No return.
+            //
+        case P_HV_PSCI_FEATURES:
+            reply->retval = hv_psci_features(request->args[0]);
+            break;
+        case P_HV_PSCI_MEM_PROTECT:
+            reply->retval = hv_psci_mem_protect(request->args[0]);
+            break;
+        case P_HV_PSCI_MEM_PROTECT_CHECK_RANGE:
+            reply->retval = hv_psci_mem_protect_check_range(request->args[0], request->args[1]);
             break;
 
         case P_FB_INIT:

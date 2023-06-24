@@ -720,9 +720,7 @@ void hv_exc_sync(struct exc_info *ctx)
              * m1n1_windows change: add SMC handling support.
              * 
              * right now the only reason a guest OS would fire an SMC is due to 
-             * requesting a PSCI service so assume this.
-             * 
-             * if this assumption ever breaks, change this code to a generic SMC handler.
+             * requesting a PSCI service.
             */
             hv_wdt_breadcrumb('s');
             handled = hv_handle_smc(ctx);

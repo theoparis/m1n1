@@ -85,7 +85,7 @@
 #define PSCI_FEATURES_FUNCTION_ID 0x8400000A
 #define PSCI_MEM_PROTECT_FUNCTION_ID 0x84000013
 #define PSCI_MEM_CHECK_RANGE_ARM32_FUNCTION_ID 0x84000014
-#define PSCI_SUSPEND_CPU_ARM64_FUNCTION_ID 0xC400000E
+#define PSCI_SUSPEND_CPU_ARM64_FUNCTION_ID 0xC4000001
 #define PSCI_MEM_CHECK_RANGE_ARM64_FUNCTION_ID 0xC4000014
 #define PSCI_CPU_ON_ARM64_FUNCTION_ID 0xC4000003
 #define PSCI_AFFINITY_INFO_ARM32_FUNCTION_ID	0x84000004
@@ -263,45 +263,45 @@ typedef struct entry_point_info {
 //
 
 unsigned int hv_psci_get_core_position(void);
-static unsigned int hv_psci_populate_power_domain_tree(const unsigned char *power_domain_tree_map);
-static void hv_psci_update_power_level_limits(void);
-static void hv_psci_get_parent_nodes(unsigned int cpu_index, unsigned int end_power_level, unsigned int *node_index);
+unsigned int hv_psci_populate_power_domain_tree(const unsigned char *power_domain_tree_map);
+void hv_psci_update_power_level_limits(void);
+void hv_psci_get_parent_nodes(unsigned int cpu_index, unsigned int end_power_level, unsigned int *node_index);
 void hv_psci_init_requested_local_power_states(void);
-uint64_t psci_mem_protect(unsigned int enable_mem_protect);
+uint64_t hv_psci_mem_protect(unsigned int enable_mem_protect);
 int hv_psci_mem_protect_check_range(unsigned long long base, unsigned long length);
 int hv_psci_features(unsigned int psci_function_id);
 void hv_psci_turn_off_system(void);
 void hv_psci_reset_system(void);
 int hv_psci_suspend_cpu(uint64_t power_state, uint64_t cpu_reentry_addr, uint64_t context);
 int hv_psci_start_cpu_suspend(const entry_point_info_t *entry_point, unsigned int end_power_level, psci_power_state_status_t *power_state_info, unsigned int is_power_down_state);
-static void hv_psci_finish_cpu_suspend(unsigned int cpu_index, unsigned int end_power_level);
+void hv_psci_finish_cpu_suspend(unsigned int cpu_index, unsigned int end_power_level);
 int hv_psci_validate_suspend_request(const psci_power_state_status_t *power_state_info, unsigned int is_power_down_state);
 void hv_psci_set_power_domains_to_on_state(unsigned int end_power_level);
-static void hv_psci_start_suspend_to_power_down(unsigned int end_power_level, const entry_point_info_t *entry_point, const psci_power_state_status_t *power_state_info);
+void hv_psci_start_suspend_to_power_down(unsigned int end_power_level, const entry_point_info_t *entry_point, const psci_power_state_status_t *power_state_info);
 void hv_psci_build_saved_cpu_context(const entry_point_info_t *entry_point);
 int hv_psci_turn_on_cpu(uint64_t target_cpu, uint64_t entry_point, uint64_t context_id);
 int hv_psci_validate_mpidr_exists(uint64_t mpidr);
 int hv_psci_validate_entry_point(entry_point_info_t *entry_point, unsigned long long cpu_reentry_addr, uint64_t context);
 unsigned int hv_psci_find_target_suspend_level(const psci_power_state_status_t *power_state_info);
 int hv_psci_turn_off_cpu(void);
-static void hv_psci_acquire_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
-static void hv_psci_release_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
-static void hv_psci_set_affinity_info_state(affinity_info_state_t state);
+void hv_psci_acquire_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
+void hv_psci_release_power_domain_tree_locks(unsigned int end_power_level, const unsigned int *parent_nodes);
+void hv_psci_set_affinity_info_state(affinity_info_state_t state);
 void hv_psci_get_target_local_power_states(unsigned int end_power_level, psci_power_state_status_t *target_state);
-static platform_local_state_type_t hv_psci_power_state_categorize_type(platform_local_state_t state);
-static void hv_psci_construct_poweroff_state(psci_power_state_status_t *state_info);
+platform_local_state_type_t hv_psci_power_state_categorize_type(platform_local_state_t state);
+void hv_psci_construct_poweroff_state(psci_power_state_status_t *state_info);
 void hv_psci_power_down_cpu_maintenance(unsigned int power_level);
-static void hv_psci_get_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
-static void hv_psci_release_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
+void hv_psci_get_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
+void hv_psci_release_lock(non_cpu_power_domain_node_t *non_cpu_power_domain_node);
 void hv_psci_coordinate_power_states(unsigned int end_power_level, psci_power_state_status_t *current_state_info);
-static void hv_psci_set_target_local_power_states(unsigned int end_power_level, const psci_power_state_status_t *target_state);
+void hv_psci_set_target_local_power_states(unsigned int end_power_level, const psci_power_state_status_t *target_state);
 unsigned int hv_psci_find_max_off_level(const psci_power_state_status_t *state_info);
-static void hv_psci_set_cpu_local_state(platform_local_state_t desired_state);
-static void hv_psci_set_non_cpu_power_domain_node_local_state(unsigned int parent_index, platform_local_state_t state);
-static platform_local_state_t hv_psci_get_non_cpu_power_domain_local_state(unsigned int parent_index);
+void hv_psci_set_cpu_local_state(platform_local_state_t desired_state);
+void hv_psci_set_non_cpu_power_domain_node_local_state(unsigned int parent_index, platform_local_state_t state);
+platform_local_state_t hv_psci_get_non_cpu_power_domain_local_state(unsigned int parent_index);
 platform_local_state_t hv_psci_get_target_power_state(unsigned int level, const platform_local_state_t *states, unsigned int num_cpu_siblings);
-static platform_local_state_t *hv_psci_get_requested_local_power_states(unsigned int power_level, unsigned int cpu_index);
-static void hv_psci_set_requested_local_power_state(unsigned int power_level, unsigned int cpu_index, platform_local_state_t requested_power_state);
+platform_local_state_t *hv_psci_get_requested_local_power_states(unsigned int power_level, unsigned int cpu_index);
+void hv_psci_set_requested_local_power_state(unsigned int power_level, unsigned int cpu_index, platform_local_state_t requested_power_state);
 int hv_psci_validate_power_state(unsigned int power_state, psci_power_state_status_t *power_state_info);
 unsigned int hv_psci_translate_mpidr_to_cpu(unsigned int mpidr);
 

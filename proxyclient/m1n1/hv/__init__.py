@@ -723,6 +723,41 @@ class HV(Reloadable):
             self.patch_exception_handling()
 
         return True
+    
+    def handle_smc(self, ctx):
+        #can't call C exception handler from python directly for now, so need to pass args from here to the C functions.
+        retval = 0 # corresponds to PSCI_STATUS_SUCCESS
+        psci_function_id = ctx.regs[0]
+        self.log(f"Python HV PSCI: function call {psci_function_id:x}")
+        if(psci_function_id == 0x84000000):
+            ctx.regs[0] = ((1 << 16) | (1))
+        elif((psci_function_id == 0x84000001) or (psci_function_id == 0xC4000001)):
+            retval = self.p.hv_psci_suspend_cpu(ctx.regs[1], ctx.regs[2], ctx.regs[3])
+            ctx.regs[0] = retval
+        elif((psci_function_id == 0x84000002)):
+            retval = self.p.hv_psci_turn_off_cpu()
+        elif((psci_function_id == 0x84000003) or (psci_function_id == 0xc4000003)):
+            retval = self.p.hv_psci_turn_on_cpu(ctx.regs[1], ctx.regs[2], ctx.regs[3])
+        elif((psci_function_id == 0x84000008)):
+            self.p.hv_psci_turn_off_system()
+        elif((psci_function_id == 0x84000009)):
+            self.p.hv_psci_reset_system()
+        elif((psci_function_id == 0x8400000A)):
+            retval = self.p.hv_psci_features(ctx.regs[1])
+            ctx.regs[0] = retval
+        elif((psci_function_id == 0x84000013)):
+            retval = self.p.hv_psci_mem_protect(ctx.regs[1])
+            ctx.regs[0] = retval
+        elif((psci_function_id == 0x84000014) or (psci_function_id == 0xc4000014)):
+            retval = self.p.hv_psci_mem_protect_check_range(ctx.regs[1], ctx.regs[2])
+            ctx.regs[0] = retval
+        else:
+            self.log("Python HV PSCI: Function call not supported")
+            ctx.regs[0] = -1
+
+        ctx.elr += 4
+        self.log(f"Python HV PSCI: SMC successful (returned value {ctx.regs[0]:x}")
+        return True
 
     def handle_impdef(self, ctx):
         if ctx.afsr1 == 0x1c00000:

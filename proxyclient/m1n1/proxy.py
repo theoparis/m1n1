@@ -603,6 +603,15 @@ class M1N1Proxy(Reloadable):
     P_VIRTIO_PUT_BUFFER = 0xc0e
     P_HV_EXIT_CPU = 0xc0f
     P_HV_ADD_TIME = 0xc10
+    P_HV_HANDLE_PSCI_SMC = 0xc11
+    P_HV_PSCI_SUSPEND_CPU = 0xc12
+    P_HV_PSCI_TURN_OFF_CPU = 0xc13
+    P_HV_PSCI_TURN_ON_CPU = 0xc14
+    P_HV_PSCI_TURN_OFF_SYSTEM = 0xc15
+    P_HV_PSCI_RESET_SYSTEM = 0xc16
+    P_HV_PSCI_FEATURES = 0xc17
+    P_HV_PSCI_MEM_PROTECT = 0xc18
+    P_HV_PSCI_MEM_PROTECT_CHECK_RANGE = 0xc19
 
     P_FB_INIT = 0xd00
     P_FB_SHUTDOWN = 0xd01
@@ -1060,6 +1069,22 @@ class M1N1Proxy(Reloadable):
         return self.request(self.P_HV_EXIT_CPU, cpu)
     def hv_add_time(self, time):
         return self.request(self.P_HV_ADD_TIME, time)
+    def hv_psci_suspend_cpu(self, power_state, cpu_reentry_addr, context):
+        return self.request(self.P_HV_PSCI_SUSPEND_CPU, power_state, cpu_reentry_addr, context)
+    def hv_psci_turn_off_cpu(self):
+        return self.request(self.P_HV_PSCI_TURN_OFF_CPU)
+    def hv_psci_turn_on_cpu(self, target_cpu, entry_point, context):
+        return self.request(self.P_HV_PSCI_TURN_ON_CPU)
+    def hv_psci_turn_off_system(self):
+        return self.request(self.P_HV_PSCI_TURN_OFF_SYSTEM)
+    def hv_psci_reset_system(self):
+        return self.request(self.P_HV_PSCI_RESET_SYSTEM)
+    def hv_psci_features(self, psci_func_id):
+        return self.request(self.P_HV_PSCI_FEATURES, psci_func_id)
+    def hv_psci_mem_protect(self, enable_mem_protect):
+        return self.request(self.P_HV_PSCI_MEM_PROTECT, enable_mem_protect)
+    def hv_psci_mem_protect_check_range(self, base, length):
+        return self.request(self.P_HV_PSCI_MEM_PROTECT_CHECK_RANGE, base, length)
 
     def fb_init(self):
         return self.request(self.P_FB_INIT)
