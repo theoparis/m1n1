@@ -269,6 +269,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         case SYSREG_ISS(SYS_PMCR_EL0):
             if(is_read) {
                 //printf("canary1\n");
+                printf("mrs(PMCR_EL0)\n");
                 regs[rt] = mrs(SYS_IMP_APL_PMCR0);
             }
             else {
@@ -288,6 +289,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_MAP(SYS_PMCCNTR_EL0, SYS_IMP_APL_PMC0)
         case SYSREG_ISS(SYS_PMCCFILTR_EL0):
             if(is_read) {
+                printf("mrs(PMCCFILTR_EL0)\n");
                 regs[rt] = mrs(SYS_IMP_APL_PMCR1);
             }
             else {
@@ -303,6 +305,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_PASS(SYS_PMCEID1_EL0)
         case SYSREG_ISS(SYS_PMCNTENCLR_EL0):
             if(is_read) {
+                printf("mrs(PMCNTENCLR_EL0)\n");
                 if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 0)) {
                     regs[rt] = (mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 1));
                     if(mrs(SYS_IMP_APL_PMCR0) & BIT(0)) {
@@ -328,6 +331,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
         case SYSREG_ISS(SYS_PMCNTENSET_EL0):
             if(is_read) {
+                printf("mrs(PMCNTENSET_EL0)\n");
                 if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 0)) {
                     regs[rt] = (mrs(SYS_IMP_APL_PMCR0) & GENMASK(7, 1));
                     if(mrs(SYS_IMP_APL_PMCR0) & BIT(0)) {
@@ -354,6 +358,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_MAP(SYS_PMEVCNTR0_EL0, SYS_IMP_APL_PMC2)
         case SYSREG_ISS(SYS_PMEVTYPER0_EL0):
             if(is_read) {
+                printf("mrs(PMEVTYPER0_EL0)\n");
                 regs[rt] = 0;
                 int value = mrs(SYS_IMP_APL_PMCR1);
                 if(value & GENMASK(23, 16)) {
@@ -381,6 +386,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
         case SYSREG_ISS(SYS_PMINTENCLR_EL1):
             if(is_read) {
+                printf("mrs(PMINTENCLR_EL1)\n");
                 if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 12)) {
                     regs[rt] = ((mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 13)) >> 13);
                     if(mrs(SYS_IMP_APL_PMCR0) & BIT(12)) {
@@ -406,6 +412,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
         case SYSREG_ISS(SYS_PMINTENSET_EL1):
             if(is_read) {
+                printf("mrs(PMINTENSET_EL1)\n");
                 if(mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 12)) {
                     regs[rt] = ((mrs(SYS_IMP_APL_PMCR0) & GENMASK(19, 13)) >> 13);
                     if(mrs(SYS_IMP_APL_PMCR0) & BIT(12)) {
@@ -437,6 +444,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
         case SYSREG_ISS(SYS_PMOVSCLR_EL0):
             if(is_read) {
+                printf("mrs(PMOVSCLR_EL0)\n");
                 int val = mrs(SYS_IMP_APL_PMSR);
                 if(val) {
                     if(val & BIT(0)) {
@@ -460,6 +468,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             return true;
         case SYSREG_ISS(SYS_PMOVSSET_EL0):
             if(is_read) {
+                printf("mrs(PMOVSSET_EL0)\n");
                 int val = mrs(SYS_IMP_APL_PMSR);
                 if(val) {
                     if(val & BIT(0)) {
@@ -484,12 +493,14 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         case SYSREG_ISS(SYS_PMSELR_EL0):
             //for now hardcode to 0, this will very likely need to change
             if(is_read) {
+                printf("mrs(PMSELR_EL0)\n");
                 regs[rt] = 0;
             }
             return true;
         SYSREG_MAP(SYS_PMSWINC_EL0, SYS_IMP_APL_PMC3)
         case SYSREG_ISS(SYS_PMUSERENR_EL0):
             if(is_read) {
+                printf("mrs(PMUSERENR_EL0)\n");
                 int user_enabled = ((mrs(SYS_IMP_APL_PMCR0) & BIT(30)) >> 30);
                 if(user_enabled) {
                     regs[rt] = BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0);
@@ -510,6 +521,7 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
         SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
         case SYSREG_ISS(SYS_PMXEVTYPER_EL0):
             if(is_read) {
+                printf("mrs(PMXEVTYPER_EL0)\n");
                 regs[rt] = 0;
                 int value = mrs(SYS_IMP_APL_PMCR1);
                 if(value & GENMASK(23, 16)) {

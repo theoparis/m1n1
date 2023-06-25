@@ -664,6 +664,27 @@ class HV(Reloadable):
         xlate = {
             DC_CIVAC,
         }
+        pmuv3redirect = {
+            PMCCNTR_EL0,
+            PMMIR_EL1,
+            PMCR_EL0,
+            PMCCFILTR_EL0,
+            PMCEID0_EL0,
+            PMCEID1_EL0,
+            PMCNTENCLR_EL0,
+            PMCNTENSET_EL0,
+            PMEVCNTR0_EL0,
+            PMEVTYPER0_EL0,
+            PMINTENCLR_EL1,
+            PMINTENSET_EL1,
+            PMOVSCLR_EL0,
+            PMOVSSET_EL0,
+            PMSELR_EL0,
+            PMSWINC_EL0,
+            PMUSERENR_EL0,
+            PMXEVCNTR_EL0,
+            PMXEVTYPER_EL0
+        }
         for i in range(len(self._bps)):
             shadow.add(DBGBCRn_EL1(i))
             shadow.add(DBGBVRn_EL1(i))
@@ -700,6 +721,16 @@ class HV(Reloadable):
                 if iss.Rt != 31:
                     value = ctx.regs[iss.Rt]
                 self.log(f"Skip: msr {name}, x{iss.Rt} = {value:x}")
+        #elif enc in pmuv3redirect:
+            # The current goal (tentative) is to have the Windows deal with as little perf counter setup
+            # as possible and having the hypervisor do this work.
+            # Right now only implementing PMCR_EL0 and PMCCNTR_EL0 fully, leaving the other regs as a no-op for now.
+            #if iss.DIR == MSR_DIR.READ:
+                #if enc == PMCR_EL0:
+                    #value = self.mrs(PMCR0_EL1)
+                    # 
+                    #self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = ")
+
         else:
             if iss.DIR == MSR_DIR.READ:
                 enc2 = self.MSR_REDIRECTS.get(enc, enc)
