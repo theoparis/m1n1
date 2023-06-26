@@ -721,15 +721,285 @@ class HV(Reloadable):
                 if iss.Rt != 31:
                     value = ctx.regs[iss.Rt]
                 self.log(f"Skip: msr {name}, x{iss.Rt} = {value:x}")
-        #elif enc in pmuv3redirect:
-            # The current goal (tentative) is to have the Windows deal with as little perf counter setup
-            # as possible and having the hypervisor do this work.
-            # Right now only implementing PMCR_EL0 and PMCCNTR_EL0 fully, leaving the other regs as a no-op for now.
-            #if iss.DIR == MSR_DIR.READ:
-                #if enc == PMCR_EL0:
-                    #value = self.mrs(PMCR0_EL1)
-                    # 
-                    #self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = ")
+        elif enc in pmuv3redirect:
+            # Windows (seemingly) only needs access to a cycle counter to work, but Apple chips don't support PMUv3.
+            # Therefore we need to handle PMC setup for the cycle counter here.
+            if iss.DIR == MSR_DIR.READ:
+                if enc == PMCR_EL0:
+                    value = self.u.mrs(PMCR0_EL1)
+                    calculated = 0
+                    pmu_interrupt_mode_mask = ((1 << 10) | (1 << 9) | (1 << 8))
+                    # need to pull multiple different MSRs to give Windows the equivalent PMCR value.
+                    # bits [63:16] are 0
+                    # we have 9 event counters, two of which are static (cycles + instruction count), but indicate that we only have the cycle counter right now
+                    # eventually we *will* need to implement the others.
+                    #
+                    # are PMIs enabled at all?
+                    if ((value & pmu_interrupt_mode_mask) != 0):
+                        calculated = (calculated | (1 << 0))
+                    # bits 1-2 read as 0 per ARM spec
+                    # bit 3 not supported, leave it as 0 since Apple PMUs don't support counting less than every cycle.
+                    # bit 4 is read as 0 per ARM spec
+                    # return bit 5 as 0 for now.
+                    # long cycle/event counters are always enabled on Apple PMUs. 
+                    # (Firestorm/Icestorm trigger overflow on bit 47, Blizzard/Avalanche (and presumably Everest/Sawtooth) it's bit 63)
+                    # on an overflow, we can optionally stop counting on overflow PMI if bit 20 of PMCR0 is set, so query this bit
+                    # to determine status of bit 9 of emulated PMCR.
+                    if((value & (1 << 20)) != 0):
+                        calculated = (calculated | (1 << 9))
+                    calculated = (calculated | (1 << 6) | (1 << 7))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+
+                elif enc == PMCCNTR_EL0:
+                    # the simplest case. just return what PMC0 would give (since it's the cycle counter)
+                    value = self.u.mrs(PMC0_EL1)
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = value
+                elif (enc == PMCNTENCLR_EL0) or (enc == PMCNTENSET_EL0):
+                    # these regs can be treated together for the read case but must be handled separately in the write case.
+                    # for now only bit we're concerned about here is bit 31, need to check if PMC0 is enabled, and return that for bit 31
+                    value = self.u.mrs(PMCR0_EL1)
+                    calculated = 0
+                    if((value & (1 << 0)) == 1):
+                        calculated = (calculated | (1 << 31))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+                elif enc == PMCCFILTR_EL0:
+                    # check what modes we're allowed to count cycles in.
+                    value = self.u.mrs(PMCR1_EL1)
+                    calculated = 0
+                    el0_cycle_counter_mask = (1 << 8)
+                    el1_cycle_counter_mask = (1 << 16)
+                    # bits 63:32 and 23:0 are reserved as 0 per arm spec.
+                    # no secure EL2 (GL2 not in scope right now) so bit 24 is 0
+                    # bit 25 is reserved 0, bit 26/28 is 0 since no EL3
+                    # bit 27 is always 1 to my knowledge since cycles seem to always be counted in EL2
+                    calculated = (calculated | (1 << 27))
+                    # bit 29 is 0 since no EL3
+                    # check the equivalent masks in APL_PMCR1_EL1 to see if EL0 and EL1 counting are enabled for the cycle counter.
+                    if((value & el0_cycle_counter_mask) == 0):
+                        calculated = (calculated | (1 << 30))
+                    if((value & el1_cycle_counter_mask) == 0):
+                        calculated = (calculated | (1 << 31))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+                
+                elif (enc == PMMIR_EL1) or (enc == PMCEID0_EL0) or (enc == PMCEID1_EL0):
+                    # return 0 for these registers for now.
+                    value = 0
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {value:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = value
+                elif (enc == PMINTENCLR_EL1) or (enc == PMINTENSET_EL1):
+                    # can be treated together for reads, must be separated for writes.
+                    # overflow interrupts will always happen, so the values of these registers will be determined
+                    # by whether or not PMIs are enabled for a given perf counter. 
+                    # as before, right now only set bit 31 due to only using cycle counter.
+                    value = self.u.mrs(PMCR0_EL1)
+                    calculated = 0
+                    if(value & (1 << 12) != 0):
+                        calculated = (calculated | (1 << 31))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+                elif (enc == PMOVSCLR_EL0) or (enc == PMOVSSET_EL0):
+                    # state of the overflow bit.
+                    # as before, only cycle counter for now.
+                    value = self.u.mrs(PMSR_EL1)
+                    calculated = 0
+                    if((value & (1 << 0)) != 0):
+                        calculated = (calculated | (1 << 31))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+                elif enc == PMSELR_EL0:
+                    # always report that the cycle counter is selected for now and discard writes, this will probably need to change later on.
+                    value = 31
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {value:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = value
+                elif enc == PMUSERENR_EL0:
+                    # controls user mode/EL0 access to the PMC registers.
+                    # on Apple this is controlled by bit 30 of the PMCR0 reg, so if that's enabled, then bit 0
+                    # of this register will also be one, else not.
+                    #
+                    # for now, the overrides are not supported. not sure if it'll be an issue.
+                    value = self.u.mrs(PMCR0_EL1)
+                    calculated = 0
+                    user_mode_pmc_reg_access_enable_mask = (1 << 30)
+                    if((value & user_mode_pmc_reg_access_enable_mask) != 0):
+                        calculated = (calculated | (1 << 0))
+                    self.log(f"HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {calculated:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = calculated
+                
+                else:
+                    # the register is unimplemented for now, just return 0
+                    value = 0
+                    self.log(f"Unimplemented register - HV PMUv3 Redirect: mrs x{iss.RT}, {name} = {value:x}")
+                    if iss.Rt != 31:
+                        ctx.regs[iss.Rt] = value
+
+            else:
+                # writing to a PMUv3 MSR.
+                if iss.Rt != 31:
+                    desired_value_to_write = ctx.regs[iss.Rt]
+                if enc == PMCR_EL0:
+                    # bits 63:33 cannot be written, reserved as 0
+                    # bit 32 is not supported and any write of it will be discarded for now.
+                    # all bits up to bit 10 will have writes discarded per ARM spec.
+                    # if requesting to write bit 9, write bit 20 to APL_PMCR0.
+                    pmcr_current_value = self.u.mrs(PMCR0_EL1)
+                    stop_evt_count_on_overflow_mask = (1 << 9)
+                    reset_cycle_counter_mask = (1 << 2)
+                    enable_pmus_mask = (1 << 0)
+                    interrupt_mode_fiq_enabled = (4 << 8)
+                    if((desired_value_to_write & stop_evt_count_on_overflow_mask) != 0):
+                        pmcr_current_value = (pmcr_current_value | (1 << 20))
+                    else:
+                        pmcr_current_value = (pmcr_current_value & (~(1 << 20)))
+                    # Apple PMUs always have long event counting enabled, so a write of bits 6 and 7 does nothing.
+                    # bits 5, 4, 3 have writes discarded (no way of supporting it using Apple PMUs)
+                    # if writing bit 2 to reset the cycle counter, write 0 to PMC0 
+                    if((desired_value_to_write & reset_cycle_counter_mask) != 0):
+                        pmcr_current_value = (pmcr_current_value | (~(1 << 12)))
+                        pmcr_current_value = (pmcr_current_value | (~(1 << 0)))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMC0_EL1, 0)
+                        self.u.inst(0xd5033fdf) # isb
+                        pmcr_current_value = (pmcr_current_value | (1 << 12))
+                        pmcr_current_value = (pmcr_current_value | (1 << 0))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+
+                    # bit 1 unimplemented for now, but would be a similar thing but for an event counter
+                    # bit 0 is to enable event counters globally, the closest equivalent on Apple is setting the
+                    # "interrupt mode", so if this is set to 1, set it to FIQ mode (other modes unsupported)
+                    if((desired_value_to_write & enable_pmus_mask) != 0):
+                        pmcr_current_value = (pmcr_current_value | (4 << 8))
+                    else:
+                        pmcr_current_value = (pmcr_current_value & (~(7 << 8)))
+                    self.u.inst(0xd5033fdf) # isb
+                    self.u.msr(PMCR0_EL1, pmcr_current_value)
+                    self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif enc == PMCCNTR_EL0:
+                    # normally resets of the cycle counter are handled by bit 2 of PMCR_EL0,
+                    # and this is normally read only by itself (despite the Apple equivalent being fully writable)
+                    # therefore discard writes here.
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (skipped write) ({sysreg_name(enc)})")
+                elif enc == PMCNTENCLR_EL0:
+                    # one of the perf counters is being requested to be disabled, write 0 to the equivalent bit in PMCR0_EL1 (aka [7:0])
+                    pmcr_current_value = self.u.mrs(PMCR0_EL1)
+                    counters_to_be_disabled_mask = 0xffffffff
+                    cycle_counter_bit_apple = (1 << 0)
+
+                    # if no counters are being asked to be disabled, fast track.
+                    if((desired_value_to_write & counters_to_be_disabled_mask) != 0):
+                        # cannot disable any counters above PMC9 as those don't exist so far.
+                        # for now we only care about the cycle counter, so check if that's asking to be disabled specifically
+                        # and then honor that request.
+                        if((desired_value_to_write & (1 << 31)) != 0):
+                            pmcr_current_value = (pmcr_current_value & (~(cycle_counter_bit_apple)))
+                        # TODO: support a mechanism of disabling other event counters when we properly introduce them.
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif enc == PMCNTENSET_EL0:
+                    # perf counter requested to be enabled, write 1 to the equivalent bit in PMCR0_EL1
+                    pmcr_current_value = self.u.mrs(PMCR0_EL1)
+                    counters_to_be_enabled_mask = 0xffffffff
+                    cycle_counter_bit_apple = (1 << 0)
+                    # fast track if nothing is being asked to be enabled
+                    if((desired_value_to_write & counters_to_be_disabled_mask) != 0):
+                        # as with disabling, cycle counter only for now.
+                        if((desired_value_to_write & (1 << 31)) != 0):
+                            pmcr_current_value = (pmcr_current_value | (1 << 0))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif enc == PMCCFILTR_EL0:
+                    # filtering certain ELs from counting cycles.
+                    # for the EL2 bit, there's no known mechanism in Apple PMUs to stop EL2 from counting cycles, so
+                    # discard any attempt to set bit 27 (EL2 counting) to 0
+                    # for EL0/EL1, enable filtering of cycle counter (other counters to be implemented later) if those bits (31:30)
+                    # are being set to 1 (why bits 31:30 behave oppositely to 27 I will never know...)
+                    pmcr1_current_value = self.u.mrs(PMCR1_EL1)
+                    if((desired_value_to_write & (1 << 30)) == 0):
+                        pmcr1_current_value = (pmcr1_current_value | (1 << 8))
+                    else:
+                        pmcr1_current_value = (pmcr1_current_value & (~(1 << 8)))
+                    if((desired_value_to_write & (1 << 31)) == 0):
+                        pmcr1_current_value = (pmcr1_current_value | (1 << 16))
+                    else:
+                        pmcr1_current_value = (pmcr1_current_value & (~(1 << 16)))
+                    self.u.inst(0xd5033fdf) # isb
+                    self.u.msr(PMCR1_EL1, pmcr1_current_value)
+                    self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif (enc == PMMIR_EL1) or (enc == PMCEID0_EL0) or (enc == PMCEID1_EL0):
+                    # ignore writes to any of these registers for now.
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (skipped write) ({sysreg_name(enc)})")
+                elif enc == PMINTENCLR_EL1:
+                    # disables the PMI for a given perf counter (basically controls bits 19:12 in PMCR0)
+                    pmcr_current_value = self.u.mrs(PMCR0_EL1)
+                    interrupts_to_be_disabled_mask = 0xffffffff
+                    cycle_counter_interrupt_bit_apple = (1 << 12)
+                    if((desired_value_to_write & interrupts_to_be_disabled_mask) != 0):
+                        #cycle counter only for now.
+                        if((desired_value_to_write & (1 << 31)) != 0):
+                            pmcr_current_value = (pmcr_current_value & (~(cycle_counter_interrupt_bit_apple)))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif enc == PMINTENSET_EL1:
+                    # enables the PMI for a given perf counter
+                    pmcr_current_value = self.u.mrs(PMCR0_EL1)
+                    interrupts_to_be_enabled_mask = 0xffffffff
+                    cycle_counter_interrupt_bit_apple = (1 << 12)
+                    if((desired_value_to_write & interrupts_to_be_enabled_mask) != 0):
+                        # cycle counter only for now
+                        if((desired_value_to_write & (1 << 31)) != 0):
+                            pmcr_current_value = (pmcr_current_value | (cycle_counter_interrupt_bit_apple))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                elif enc == PMOVSCLR_EL0:
+                    # clearing the overflow bit (aka MSB of the PMC0 counter)
+                    pmsr_current_value = self.u.mrs(PMSR_EL1)
+                    pmcr0_current_value = self.u.mrs(PMCR0_EL1)
+                    # cycle counter only for now
+                    if((desired_value_to_write & (1 << 31)) != 0):
+                        pmcr0_current_value = (pmcr0_current_value & (~(1 << 12)))
+                        pmcr0_current_value = (pmcr0_current_value & (~(1 << 0)))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr0_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMC0_EL1, 0)
+                        self.u.inst(0xd5033fdf) # isb
+                        pmcr0_current_value = (pmcr0_current_value | (1 << 12))
+                        pmcr0_current_value = (pmcr0_current_value | (1 << 0))
+                        self.u.inst(0xd5033fdf) # isb
+                        self.u.msr(PMCR0_EL1, pmcr0_current_value)
+                        self.u.inst(0xd5033fdf) # isb
+
+                    self.log(f"HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x} (OK) ({sysreg_name(enc)})")
+                else:
+                    # discard any writes to other registers.
+                    # if we need to change this for another register, remember to add it above this else statement.
+                    self.log(f"Unimplemented register - HV PMUv3 Redirect: msr {name}, x{iss.Rt} = {desired_value_to_write:x}")
 
         else:
             if iss.DIR == MSR_DIR.READ:
@@ -745,7 +1015,7 @@ class HV(Reloadable):
                 sys.stdout.flush()
                 if enc in xlate:
                     value = self.p.hv_translate(value, True, False)
-                self.u.msr(enc2, value, call=self.p.gl2_call)
+                self.u.msr(enc2, value)
                 self.log(f"Pass: msr {name}, x{iss.Rt} = {value:x} (OK) ({sysreg_name(enc2)})")
 
         ctx.elr += 4
@@ -787,7 +1057,7 @@ class HV(Reloadable):
             ctx.regs[0] = -1
 
         ctx.elr += 4
-        self.log(f"Python HV PSCI: SMC successful (returned value {ctx.regs[0]:x}")
+        self.log(f"Python HV PSCI: SMC successful (returned value {ctx.regs[0]:x})")
         return True
 
     def handle_impdef(self, ctx):
@@ -795,6 +1065,8 @@ class HV(Reloadable):
             # SMC trap
             return self.handle_smc(ctx)
         if ctx.esr.ISS == 0x20:
+            #self.log("Python HV: MSR IMPDEF hook being handled")
+            #self.log(f"Python HV: ESR_EL1:{ctx.esr.value:x}")
             return self.handle_msr(ctx, ctx.afsr1)
 
         code = struct.unpack("<I", self.iface.readmem(ctx.elr_phys, 4))
