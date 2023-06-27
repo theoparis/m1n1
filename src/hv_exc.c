@@ -668,26 +668,15 @@ static bool hv_handle_msr_unlocked(struct exc_info *ctx, u64 iss)
             }
             return true;
         //SYSREG_MAP(SYS_PMSWINC_EL0, SYS_IMP_APL_PMC3)
-        // case SYSREG_ISS(SYS_PMUSERENR_EL0):
-        //     if(is_read) {
-        //         printf("mrs(PMUSERENR_EL0)\n");
-        //         int user_enabled = ((mrs(SYS_IMP_APL_PMCR0) & BIT(30)) >> 30);
-        //         if(user_enabled) {
-        //             regs[rt] = BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0);
-        //         }
-        //         else {
-        //             regs[rt] = 0;
-        //         }
-        //     }
-        //     else {
-        //         printf("msr(PMUSERENR_EL0, 0x%08lx): changing user mode access to PMCs\n", regs[rt]);
-        //         int val = mrs(SYS_IMP_APL_PMCR0);
-        //         if(regs[rt] & (BIT(4) | BIT(3) | BIT(2) | BIT(1) | BIT(0))) {
-        //             val |= BIT(30);
-        //         }
-        //         msr(SYS_IMP_APL_PMCR0, val);
-        //     }
-        //    return true;
+        case SYSREG_ISS(SYS_PMUSERENR_EL0):
+            if(is_read) {
+                regs[rt] = 0;
+                printf("HV PMUv3 Redirect: mrs x%ld, PMUSERENR_EL0 = 0x%lx\n", rt, regs[rt]);
+            }
+            else {
+                printf("HV PMUv3 Redirect (skipped write): msr PMUSERENR_EL0, x%ld = 0x%lx\n", rt, regs[rt]);
+            }
+           return true;
         // SYSREG_MAP(SYS_PMXEVCNTR_EL0, SYS_IMP_APL_PMC2)
         // case SYSREG_ISS(SYS_PMXEVTYPER_EL0):
         //     if(is_read) {

@@ -40,7 +40,7 @@ from m1n1.hw.pmu import PMU
 iface = UartInterface()
 p = M1N1Proxy(iface, debug=False)
 bootstrap_port(iface, p)
-u = ProxyUtils(p, heap_size = 128 * 1024 * 1024)
+u = ProxyUtils(p, heap_size = 512 * 1024 * 1024)
 
 hv = HV(iface, p, u)
 
