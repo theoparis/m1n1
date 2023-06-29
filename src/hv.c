@@ -70,6 +70,7 @@ void hv_init(void)
                  HCR_APK | // Allow PAuth key registers
                  HCR_TEA | // Trap external aborts
                  HCR_RW |  // AArch64 guest
+                 HCR_TSC | // Trap SMC exceptions (only writable on Blizzard/Avalanche cores as the previous generations used a chicken bit for this.)
                  HCR_AMO | // Trap SError exceptions
                  HCR_IMO | // Trap IRQ exceptions (for now)
                  HCR_FMO | // Trap FIQ exceptions (effectively required for now)

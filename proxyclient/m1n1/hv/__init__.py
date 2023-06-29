@@ -1742,6 +1742,11 @@ class HV(Reloadable):
         hcr.TVM = 0
         hcr.FMO = 1
         hcr.IMO = 0
+        #
+        # trap SMCs (this bit is only applicable for Blizzard/Avalanche and later cores since earlier generations used a chicken bit and these
+        # cores implement nested virtualization.
+        #
+        hcr.TSC = 1
         hcr.TTLBOS = 1
         self.u.msr(HCR_EL2, hcr.value)
 

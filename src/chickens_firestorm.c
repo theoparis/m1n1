@@ -7,8 +7,10 @@ static void init_common_firestorm(void)
 {
     reg_set(SYS_IMP_APL_HID0, HID0_SAME_PG_POWER_OPTIMIZATION);
 
-    // m1n1_windows change: as we're booting true UEFI/Windows, allow SMCs to be trapped to EL2 
-    // (no EL3, and HCR_EL2.TSC is not writable on Apple platforms [it's role is taken over by this register])
+    //
+    // m1n1_windows change: to facilitate PSCI support for OSes that require it, allow SMCs to be trapped to EL2 on Firestorm/Icestorm cores.
+    // (standard HCR bit is used on Blizzard/Avalanche and later cores.)
+    //
     reg_set(SYS_IMP_APL_HID1, HID1_TRAP_SMC);
 
     reg_clr(SYS_IMP_APL_HID3, HID3_DEV_PCIE_THROTTLE_ENABLE | HID3_DISABLE_ARBITER_FIX_BIF_CRD);
