@@ -6,7 +6,6 @@
 #include "adt.h"
 #include "assert.h"
 #include "clk.h"
-#include "cpufreq.h"
 #include "dapf.h"
 #include "devicetree.h"
 #include "exception.h"
@@ -1276,6 +1275,10 @@ static int dt_set_dcp_firmware(const char *alias)
         case V12_4:
             compat = &fw_versions[V12_3];
             break;
+        case V13_5B4:
+        case V13_5:
+            compat = &fw_versions[V13_3];
+            break;
         default:
             compat = &os_firmware;
             break;
@@ -1982,7 +1985,6 @@ int kboot_boot(void *kernel)
 {
     tunables_apply_static();
     clk_init();
-    cpufreq_init();
 
     usb_init();
     pcie_init();

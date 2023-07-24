@@ -24,6 +24,7 @@ class WorkCommandBarrier(ConstructClass):
         "stamp_self" / Int32ul,
         "uuid" / Int32ul,
         "unk" / Default(Int32ul, 0),
+        Ver("G >= G14X", "pad" / ZPadding(0x20)),
     )
 
 class WorkCommandInitBM(ConstructClass):
@@ -143,9 +144,15 @@ class WorkCommandCP(ConstructClass):
         "context_id" / Hex(Int32ul),
         "event_control_addr" / Hex(Int64ul),
         "event_control" / ROPointer(this.event_control_addr, EventControl),
-        "unk_buf" / HexDump(Bytes(0x54)),
-        "compute_info" / ComputeInfo,
-        "unk_b8" / HexDump(Bytes(0x1e8 - 0xcc)),
+        "unk_2c" / Int32ul,
+        Ver("G >= G14X", "registers" / Array(128, RegisterDefinition)),
+        Ver("G >= G14X", "unk_g14x" / Default(Array(64, Int32ul), [0]*64)),
+        Ver("G < G14X", "unk_buf" / HexDump(Bytes(0x50))),
+        Ver("G < G14X", "compute_info" / ComputeInfo),
+        "registers_addr" / Int64ul,
+        "register_count" / Int16ul,
+        "registers_length" / Int16ul,
+        "unk_pad" / HexDump(Bytes(0x24)),
         "microsequence_ptr" / Hex(Int64ul),
         "microsequence_size" / Hex(Int32ul),
         "microsequence" / ROPointer(this.microsequence_ptr, MicroSequence),
@@ -242,10 +249,12 @@ class WorkCommand3D(ConstructClass):
         "merge_upper_y" / Hex(Float32l),
         "unk_68" / Hex(Int64ul),
         "tile_count" / Hex(Int64ul),
-
         # Embedded structures that are also pointed to by other stuff
-        "struct_2" / Start3DStruct2,
-        "struct_1" / Start3DStruct1,
+        Ver("G < G14X", "struct_2" / Start3DStruct2),
+        Ver("G < G14X", "struct_1" / Start3DStruct1),
+        Ver("G >= G14X", "registers" / Array(128, RegisterDefinition)),
+        Ver("G >= G14X", "unk_g14x" / Default(Array(64, Int32ul), [0]*64)),
+        "struct_3" / Start3DStruct3,
         "unk_758" / Flag,
         "unk_75c" / Flag,
         "unk_buf" / WorkCommand1_UnkBuf,
@@ -265,7 +274,7 @@ class WorkCommand3D(ConstructClass):
         Ver("V >= V13_0B4", "unk_928_4" / Int8ul),
         Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
         Ver("V >= V13_0B4", "unk_928_d" / Default(HexDump(Bytes(0x1b)), bytes(0x1b))),
-        "pad_928" / Default(HexDump(Bytes(0x18)), bytes(0x18)),
+        Ver("V == V13_3", "unk_pad2" / Default(HexDump(Bytes(0x3c)), bytes(0x3c))),
     )
 
 class WorkCommand0_UnkBuf(ConstructValueClass):
@@ -315,11 +324,16 @@ class WorkCommandTA(ConstructClass):
         "unk_34" / Hex(Int32ul),
 
         # Embedded structures that are also pointed to by other stuff
-        "struct_2" / StartTACmdStruct2, # 0x11c bytes
-        "unk_154" / HexDump(Bytes(0x268)), # unknown
-        "tiling_params" / TilingParameters, # 0x2c bytes
-        "unk_3e8" / HexDump(Bytes(0x74)), # unknown
-
+        Ver("G >= G14X", "registers" / Array(128, RegisterDefinition)),
+        Ver("G >= G14X", "unk_154" / Default(HexDump(Bytes(0x100)), bytes(0x100))), # unknown
+        Ver("G < G14X", "struct_2" / StartTACmdStruct2), # 0x11c bytes
+        Ver("G < G14X", "unk_154" / Default(HexDump(Bytes(0x268)), bytes(0x268))), # unknown
+        Ver("G < G14X", "tiling_params" / TilingParameters), # unknown
+        Ver("G < G14X", "unk_3e8" / HexDump(Bytes(0x64))), # unknown
+        "registers_addr" / Int64ul,
+        "register_count" / Int16ul,
+        "registers_length" / Int16ul,
+        "unk_pad" / Int32ul,
         "unkptr_45c" / Int64ul,
         "tvb_size" / Int64ul,
         "microsequence_ptr" / Hex(Int64ul),
@@ -347,7 +361,7 @@ class WorkCommandTA(ConstructClass):
         Ver("V >= V13_0B4", "unk_ts" / TimeStamp),
         Ver("V >= V13_0B4", "unk_5d8_d" / Default(HexDump(Bytes(0x13)), bytes(0x13))),
         "pad_5d8" / Default(HexDump(Bytes(0x8)), bytes(0x8)),
-        Ver("V >= V13_0B4", "pad_5e0" / Default(HexDump(Bytes(0x18)), bytes(0x18))),
+        Ver("V >= V13_3", "unk_pad2" / Default(HexDump(Bytes(0xc)), bytes(0xc))),
     )
 
 class WorkCommandBlit(ConstructClass):
@@ -360,36 +374,13 @@ class WorkCommandBlit(ConstructClass):
         "event_control" / ROPointer(this.event_control_addr, EventControl),
         "unk_10" / Hex(Int32ul),
         "unk_14" / Int32ul,
-        "unk_18" / Int64ul,
-        "unk_20" / Int64ul,
-        "unk_28" / Int64ul,
-        "unk_30" / Int64ul,
-        "unk_38" / Int64ul,
-        "unk_40" / Int64ul,
-        "unk_48" / HexDump(Bytes(0xa0)),
-        "unkptr_e8" / Int64ul,
-        "unk_f0" / Int64ul,
-        "unkptr_f8" / Int64ul,
-        "pipeline_base" / Int64ul,
-        "unk_108" / Int64ul,
-        "unk_110" / HexDump(Bytes(0x248)),
-        "unk_358" / Int32ul,
-        "unk_35c" / Int32ul,
-        "unk_360" / Int32ul,
-        "unk_364" / Int32ul,
-        "unk_368" / Float32l,
-        "unk_36c" / Float32l,
-        "unk_370" / Int64ul,
-        "unk_378" / Int64ul,
-        "unk_380" / Int64ul,
-        "unk_388" / Int64ul,
-        "unk_390" / HexDump(Bytes(0xd8)),
-        "unk_468" / Int64ul,
-        "unk_470" / Int64ul,
-        "unk_478" / Int32ul,
-        "unk_47c" / Int32ul,
-        "unk_480" / Int64ul,
-        "unk_488" / Int64ul,
+        Ver("G < G14X", "blit_info" / BlitInfo),
+        Ver("G >= G14X", "registers" / Array(128, RegisterDefinition)),
+        Ver("G >= G14X", "unk_g14x" / Default(Array(64, Int32ul), [0]*64)),
+        "registers_addr" / Int64ul,
+        "register_count" / Int16ul,
+        "registers_length" / Int16ul,
+        "blit_info2" / BlitInfo2,
         "microsequence_ptr" / Hex(Int64ul),
         "microsequence_size" / Hex(Int32ul),
         "microsequence" / ROPointer(this.microsequence_ptr, MicroSequence),
@@ -529,7 +520,8 @@ class CommandQueueInfo(ConstructClass):
         "unk_54" / Int32sl,
         "unk_58" / Hex(Int64ul), # 0
         "busy" / Hex(Int32ul), # 1 = gpu busy
-        "pad1" / ZPadding(0x20),
+        "pad1" / ZPadding(0x1c),
+        "unk_80" / Hex(Int32ul),
         "blocked_on_barrier" / Hex(Int32ul),
         "unk_88" / Int32ul,
         "unk_8c" / Int32ul,
@@ -537,11 +529,11 @@ class CommandQueueInfo(ConstructClass):
         "unk_94" / Int32ul,
         "pending" / Int32ul,
         "unk_9c" / Int32ul,
-        Ver("V >= V13_2", "unk_a0_0" / Int32ul),
+        Ver("V >= V13_2 && G < G14X", "unk_a0_0" / Int32ul),
         "gpu_context_addr" / Hex(Int64ul), # GPU managed context, shared between 3D and TA. Passed to DC_DestroyContext
         "gpu_context" / ROPointer(this.gpu_context_addr, GPUContextData),
         "unk_a8" / Int64ul,
-        Ver("V >= V13_2", "unk_b0" / Int32ul),
+        Ver("V >= V13_2 && G < G14X", "unk_b0" / Int32ul),
         # End of struct
     )
 
@@ -557,6 +549,7 @@ class CommandQueueInfo(ConstructClass):
         self.unk_58 = 0x0
         self.busy = 0x0
         self.blocked_on_barrier = 0x0
+        self.unk_80 = 0
         self.unk_88 = 0
         self.unk_8c = 0
         self.unk_90 = 0

@@ -6,9 +6,9 @@ from m1n1.constructutils import *
 from construct import *
 from .cmdqueue import *
 
-__all__ = ["channelNames", "channelRings", "DeviceControlMsg", "EventMsg", "StatsMsg"]
+__all__ = ["channelNames", "channelRings", "DeviceControlMsg", "EventMsg", "StatsMsg", "StatsSize"]
 
-if Ver.check("G >= G14 && V >= V13_2"):
+if Ver.check("G >= G14 && V >= V13_2 && G < G14X"):
     RunCmdQueueSize = 0x40
 else:
     RunCmdQueueSize = 0x30
@@ -22,7 +22,7 @@ class RunCmdQueueMsg(ConstructClass):
         "event_number" / Default(Int32ul, 0),
         "new_queue" / Default(Int32ul, 0),
         "data" / HexDump(Default(Bytes(0x18), bytes(0x18))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G >= G14 && V >= V13_2 && G < G14X", ZPadding(0x10)),
     )
 
     TYPES = {
@@ -43,7 +43,8 @@ class RunCmdQueueMsg(ConstructClass):
 
 class DC_DestroyContext(ConstructClass):
     subcon =  Struct (
-        "msg_type" / Const(0x17, Int32ul),
+        Ver("V < V13_3", "msg_type" / Const(0x17, Int32ul)),
+        Ver("V >= V13_3", "msg_type" / Const(0x18, Int32ul)),
         "unk_4" / Hex(Int32ul),
         "unk_8" / Hex(Int32ul),
         "unk_c" / Hex(Int32ul),
@@ -52,12 +53,13 @@ class DC_DestroyContext(ConstructClass):
         "unk_18" / Hex(Int32ul),
         "context_addr" / Hex(Int64ul),
         "rest" / HexDump(Default(Bytes(0xc), bytes(0xc))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Write32(ConstructClass):
     subcon =  Struct (
-        "msg_type" / Const(0x18, Int32ul),
+        Ver("V < V13_3", "msg_type" / Const(0x18, Int32ul)),
+        Ver("V >= V13_3", "msg_type" / Const(0x19, Int32ul)),
         "addr" / Hex(Int64ul),
         "data" / Int32ul,
         "unk_10" / Int32ul,
@@ -65,7 +67,7 @@ class DC_Write32(ConstructClass):
         "unk_18" / Int32ul,
         "unk_1c" / Int32ul,
         "rest" / HexDump(Default(Bytes(0x10), bytes(0x10))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Write32B(ConstructClass):
@@ -78,14 +80,15 @@ class DC_Write32B(ConstructClass):
         "unk_18" / Int32ul,
         "unk_1c" / Int32ul,
         "rest" / HexDump(Default(Bytes(0x10), bytes(0x10))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Init(ConstructClass):
     subcon =  Struct (
-        "msg_type" / Const(0x19, Int32ul),
+        Ver("V < V13_3", "msg_type" / Const(0x19, Int32ul)),
+        Ver("V >= V13_3", "msg_type" / Const(0x1a, Int32ul)),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_09(ConstructClass):
@@ -95,14 +98,25 @@ class DC_09(ConstructClass):
         "unkptr_c" / Int64ul,
         "unk_14" / Int64ul,
         "data" /  HexDump(Default(Bytes(0x14), bytes(0x14))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
+    )
+
+class DC_GrowTVBAck(ConstructClass):
+    subcon =  Struct (
+        "msg_type" / Const(0xd, Int32ul),
+        "unk_4" / Int32ul,
+        "bm_id" / Int32ul,
+        "vm_id" / Int32ul,
+        "counter" / Int32ul,
+        "rest" / HexDump(Default(Bytes(0x1c), bytes(0x1c))),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_Any(ConstructClass):
     subcon =  Struct (
         "msg_type" / Int32ul,
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_1e(ConstructClass):
@@ -111,24 +125,24 @@ class DC_1e(ConstructClass):
         "unk_4" / Int64ul,
         "unk_c" / Int64ul,
         "data" /  HexDump(Default(Bytes(0x1c), bytes(0x1c))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class DC_UpdateIdleTS(ConstructClass):
     subcon = Struct (
         "msg_type" / Const(0x23, Int32ul),
         "data" / HexDump(Default(Bytes(0x2c), bytes(0x2c))),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
 class UnknownMsg(ConstructClass):
     subcon = Struct (
         "msg_type" / Hex(Int32ul),
         "data" / HexDump(Bytes(0x2c)),
-        Ver("G >= G14 && V >= V13_2", ZPadding(0x10)),
+        Ver("G == G14 && V >= V13_2", ZPadding(0x10)),
     )
 
-if Ver.check("G >= G14 && V >= V13_2"):
+if Ver.check("G == G14 && V >= V13_2"):
     DeviceControlSize = 0x40
 else:
     DeviceControlSize = 0x30
@@ -139,6 +153,7 @@ DeviceControlMsg = FixedSized(DeviceControlSize, Select(
     DC_UpdateIdleTS,
     DC_1e,
     DC_Write32,
+    DC_GrowTVBAck,
     UnknownMsg,
 ))
 
@@ -334,10 +349,20 @@ class TimeoutMsg(ConstructClass):
         "unkpad_16" / HexDump(Bytes(0x38 - 0x10)),
     )
 
+class GrowTVBMsg(ConstructClass):
+    subcon = Struct (
+        "msg_type" / Hex(Const(7, Int32ul)),
+        "vm_id" / Hex(Int32ul),
+        "bm_id" / Hex(Int32ul),
+        "counter" / Hex(Int32ul),
+        "tail" / HexDump(Bytes(0x38 - 0x10)),
+    )
+
 EventMsg = FixedSized(0x38, Select(
     FaultMsg,
     FlagMsg,
     TimeoutMsg,
+    GrowTVBMsg,
     HexDump(Bytes(0x38)),
 ))
 
@@ -483,7 +508,8 @@ class Channel(Reloadable):
         assert index < count
         addr = self.rb_base[ring] + index * size
         stream = self.uat.iostream(0, addr)
-        stream.meta_fn = lambda a, b: meta_fn(0, a, b)
+        if meta_fn is not None:
+            stream.meta_fn = lambda a, b: meta_fn(0, a, b)
         return msgcls.parse_stream(stream)
 
     def clear_message(self, ring, index):
