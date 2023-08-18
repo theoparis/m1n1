@@ -19,7 +19,6 @@ struct afk_rb_hdr {
 struct afk_rb {
     bool ready;
     struct afk_rb_hdr *hdr;
-    u32 rptr;
     void *buf;
     size_t bufsz;
 };
@@ -276,10 +275,16 @@ static int afk_epic_tx(afk_epic_ep_t *epic, u32 channel, u32 type, void *data, s
     u32 rptr = rb->hdr->rptr;
     u32 wptr = rb->hdr->wptr;
     struct afk_qe *hdr = rb->buf + wptr;
+    size_t buf_advance = ALIGN_UP(sizeof(struct afk_qe) + size, 1 << BLOCK_SHIFT);
 
-    if (wptr < rptr && (wptr + sizeof(struct afk_qe) > rptr)) {
-        printf("EPIC: TX ring buffer is full\n");
-        return -1;
+    if (wptr < rptr && buf_advance >= rptr - wptr)
+        goto buffer_full;
+    if (wptr >= rptr) {
+        bool fits_above_wptr =
+            (buf_advance < rb->bufsz - wptr) || (buf_advance == rb->bufsz - wptr && rptr != 0);
+
+        if (!fits_above_wptr && buf_advance >= rptr)
+            goto buffer_full;
     }
 
     hdr->magic = QE_MAGIC;
@@ -290,22 +295,15 @@ static int afk_epic_tx(afk_epic_ep_t *epic, u32 channel, u32 type, void *data, s
     wptr += sizeof(struct afk_qe);
 
     if (size > rb->bufsz - wptr) {
-        if (rptr < sizeof(struct afk_qe)) {
-            printf("EPIC: TX ring buffer is full\n");
-            return -1;
-        }
         *(struct afk_qe *)rb->buf = *hdr;
         hdr = rb->buf;
         wptr = sizeof(struct afk_qe);
     }
 
-    if (wptr < rptr && (wptr + size > rptr)) {
-        printf("EPIC: TX ring buffer is full\n");
-        return -1;
-    }
-
     wptr += size;
     wptr = ALIGN_UP(wptr, 1 << BLOCK_SHIFT);
+    if (wptr >= rb->bufsz)
+        wptr = 0;
 
     memcpy(hdr + 1, data, size);
 
@@ -324,6 +322,10 @@ static int afk_epic_tx(afk_epic_ep_t *epic, u32 channel, u32 type, void *data, s
     }
 
     return 1;
+
+buffer_full:
+    printf("EPIC: TX ring buffer is full\n");
+    return -1;
 }
 
 static void afk_epic_rx_ack(afk_epic_ep_t *epic)
@@ -339,7 +341,7 @@ static void afk_epic_rx_ack(afk_epic_ep_t *epic)
     dma_mb();
 
     rptr = ALIGN_UP(rptr + sizeof(*hdr) + hdr->size, 1 << BLOCK_SHIFT);
-    assert(rptr < rb->bufsz);
+    assert(rptr <= rb->bufsz);
     if (rptr == rb->bufsz)
         rptr = 0;
     rb->hdr->rptr = rptr;

@@ -32,7 +32,7 @@ struct aux_perf_state {
 };
 
 struct aux_perf_states {
-    u64 base;
+    u64 dies;
     u64 count;
     struct aux_perf_state states[];
 };
@@ -56,12 +56,14 @@ static int get_core_counts(u32 *count, u32 nclusters, u32 ncores)
             cores[1] = read32(base + 0xd01514);
             /* fallthrough */
         case T8103:
+        case T8112:
         case T6000:
         case T6001:
             cores[0] = read32(base + 0xd01500);
             break;
         case T6020:
         case T6021:
+        case T6022:
             cores[0] = read32(base + 0xe01500);
             cores[1] = read32(base + 0xe01504);
             cores[2] = read32(base + 0xe01508);
@@ -168,9 +170,10 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
                             float *afr_leak)
 {
     float s_sram, k_sram, s_core, k_core, s_cs, k_cs;
-    float dk_core, dk_sram = 0, dk_cs;
+    float dk_core, dk_sram = 0, dk_cs = 0;
     float imax = 1000;
 
+    u32 ndies = 1;
     u32 nclusters = 0;
     u32 ncores = 0;
     u32 core_count[MAX_CLUSTERS];
@@ -181,6 +184,7 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
 
     switch (chip_id) {
         case T6002:
+            ndies = 2;
             nclusters += 4;
             load_fuses(core_leak + 4, 4, 0x22922bc1b8, 25, 13, 2, 2, true);
             load_fuses(sram_leak + 4, 4, 0x22922bc1cc, 4, 9, 1, 1, true);
@@ -224,18 +228,31 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
             adjust_leakages = false; // pre-adjusted?
             imax = 24.0;
             break;
-        case T6021:
+        case T6022:
+            ndies = 2;
             nclusters += 4;
-            s_sram = 5.80760758;
-            k_sram = 0.00707453862;
+            load_fuses(core_leak + 4, min(4, nclusters), 0x229e2cc1f8, 4, 13, 2, 2, true);
+            load_fuses(sram_leak + 4, min(4, nclusters), 0x229e2cc208, 19, 9, 1, 1, true);
+            load_fuses(cs_leak + 1, 1, 0x229e2cc204, 8, 12, 1, 1, false);
+            load_fuses(afr_leak + 1, 1, 0x229e2cc210, 0, 12, 1, 1, false);
+
+            // For some reason, this one is different on T6022...
+            dk_cs = 6.7;
+            // fallthrough
+        case T6021:
+            if (!dk_cs)
+                dk_cs = 4.492;
+
+            nclusters += 4;
+            s_sram = 5.808;
+            k_sram = 0.00707;
             // macOS difference: macOS uses a misbehaved piecewise function here
             // Since it's obviously wrong, let's just use only the first component
             s_core = 1.24554153;
             k_core = 0.56203084;
 
-            s_cs = 1.8593429;
-            k_cs = 0.1629485;
-            dk_cs = 4.49158089;
+            s_cs = 1.87;
+            k_cs = 0.162;
 
             goto t602x;
 
@@ -248,13 +265,13 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
             s_core = 1.21006932;
             k_core = 0.52776378;
 
-            s_cs = 1.81949284;
-            k_cs = 0.1565765;
-            dk_cs = 1.88830323;
+            s_cs = 1.8;
+            k_cs = 0.162;
+            dk_cs = 1.889;
 
         t602x:
-            dk_core = 1.0007;
-            dk_sram = 0.007955;
+            dk_core = 1.00075;
+            dk_sram = 0.00785;
             load_fuses(core_leak + 0, min(4, nclusters), 0x29e2cc1f8, 4, 13, 2, 2, false);
             load_fuses(sram_leak + 0, min(4, nclusters), 0x29e2cc208, 19, 9, 1, 1, false);
             load_fuses(cs_leak + 0, 1, 0x29e2cc204, 8, 12, 1, 1, false);
@@ -331,18 +348,20 @@ static int calc_power_t600x(u32 count, u32 table_count, const struct perf_state 
         // CS gets added after the imax limit
 
         if (has_cs) {
-            float mw = 0;
+            for (u32 j = 0; j < ndies; j++) {
+                float mw = 0;
 
-            int csi = min(i, cs->count - 1);
-            u32 cs_mv = cs->states[csi].volt / 1000;
-            u32 cs_hz = cs->states[csi].freq;
+                int csi = j * cs->count + min(i, cs->count - 1);
+                u32 cs_mv = cs->states[csi].volt / 1000;
+                u32 cs_hz = cs->states[csi].freq;
 
-            mw += cs_mv / 1000.f * cs_leak[0] * k_cs * expf(cs_mv / 1000.f * s_cs);
-            float csbase = cs_mv / 750.f;
-            float cs_v_p = powf(csbase, 1.8);
-            mw += dk_cs * (cs_hz / 1000000.f) * cs_v_p;
+                mw += cs_mv / 1000.f * cs_leak[j] * k_cs * expf(cs_mv / 1000.f * s_cs);
+                float csbase = cs_mv / 750.f;
+                float cs_v_p = powf(csbase, 1.8);
+                mw += dk_cs * (cs_hz / 1000000.f) * cs_v_p;
 
-            total_mw += mw;
+                total_mw += mw;
+            }
         }
 
         max_pwr[i] = total_mw * 1000;
@@ -418,14 +437,14 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
         fdt32_t volts[MAX_DIES];
 
         for (u32 j = 0; j < dies; j++) {
-            volts[j] = cpu_to_fdt32(ps->states[i].volt);
+            volts[j] = cpu_to_fdt32(ps->states[i + j * ps->count].volt);
         }
 
         if (i >= count)
             bail("FDT: GPU: Expected %d operating points, but found more\n", count);
 
         if (fdt_setprop_inplace(dt, opp, "opp-microvolt", &volts, sizeof(u32) * dies))
-            bail("FDT: GPU: Failed to set opp-microvolt for PS %d\n", i);
+            bail("FDT: GPU: Failed to set opp-microvolt for aux PS %d\n", i);
 
         if (fdt_setprop_inplace_u64(dt, opp, "opp-hz", ps->states[i].freq))
             bail("FDT: GPU: Failed to set opp-hz for PS %d\n", i);
@@ -438,9 +457,12 @@ static int fdt_set_aux_opp(void *dt, int gpu, const char *prop, const struct aux
 
 int dt_set_gpu(void *dt)
 {
+    bool has_cs_afr = false;
     int (*calc_power)(u32 count, u32 table_count, const struct perf_state *core,
                       const struct perf_state *sram, const struct aux_perf_states *cs, u32 *max_pwr,
                       float *core_leak, float *sram_leak, float *cs_leak, float *afr_leak);
+
+    u32 dies = 1;
 
     printf("FDT: GPU: Initializing GPU info\n");
 
@@ -448,12 +470,20 @@ int dt_set_gpu(void *dt)
         case T8103:
             calc_power = calc_power_t8103;
             break;
-        case T6000:
-        case T6001:
-        case T6002:
-        case T8112:
-        case T6020:
+        case T6022:
+            dies = 2;
+            // fallthrough
         case T6021:
+        case T6020:
+            has_cs_afr = true;
+            calc_power = calc_power_t600x;
+            break;
+        case T6002:
+            dies = 2;
+            // fallthrough
+        case T6001:
+        case T6000:
+        case T8112:
             calc_power = calc_power_t600x;
             break;
         default:
@@ -511,6 +541,12 @@ int dt_set_gpu(void *dt)
 
     perf_states_afr = adt_getprop(adt, sgx, "afr-perf-states", NULL);
     perf_states_cs = adt_getprop(adt, sgx, "cs-perf-states", NULL);
+
+    if (has_cs_afr && !perf_states_cs)
+        bail("ADT: GPU: cs-perf-states not found\n");
+
+    if (has_cs_afr && !perf_states_afr)
+        bail("ADT: GPU: afr-perf-states not found\n");
 
     u32 max_pwr[MAX_PSTATES];
     float core_leak[MAX_CLUSTERS];
@@ -571,8 +607,7 @@ int dt_set_gpu(void *dt)
     if (i != perf_state_count)
         bail("FDT: GPU: Expected %d operating points, but found %d\n", perf_state_count, i);
 
-    u32 dies = 1;
-    if (perf_states_cs) {
+    if (has_cs_afr) {
         int ret = fdt_set_aux_opp(dt, gpu, "apple,cs-opp", perf_states_cs, dies);
         if (ret)
             return ret;
@@ -587,7 +622,7 @@ int dt_set_gpu(void *dt)
         printf("\n");
     }
 
-    if (perf_states_afr) {
+    if (has_cs_afr) {
         int ret = fdt_set_aux_opp(dt, gpu, "apple,afr-opp", perf_states_afr, dies);
         if (ret)
             return ret;

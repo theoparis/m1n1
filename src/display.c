@@ -7,6 +7,7 @@
 #include "dcp_iboot.h"
 #include "fb.h"
 #include "memory.h"
+#include "soc.h"
 #include "string.h"
 #include "utils.h"
 #include "xnuboot.h"
@@ -369,12 +370,7 @@ int display_configure(const char *config)
             return -1;
         }
 
-        cur_boot_args.mem_size -= size;
-        fb_pa = cur_boot_args.phys_base + cur_boot_args.mem_size;
-        /* add guard page between RAM and framebuffer */
-        // TODO: update mapping?
-        cur_boot_args.mem_size -= SZ_16K;
-
+        fb_pa = top_of_memory_alloc(size);
         memset((void *)fb_pa, 0, size);
 
         tmp_dva = iova_alloc(dcp->iovad_dcp, size);
@@ -463,14 +459,6 @@ int display_configure(const char *config)
 
 int display_init(void)
 {
-    // HACK: disable non-working display config on j473/j474s
-    int model_node = adt_path_offset(adt, "/");
-    if (model_node >= 0 && (adt_is_compatible(adt, model_node, "J473AP") ||
-                            adt_is_compatible(adt, model_node, "J474sAP"))) {
-        printf("display: skipping init on non-supported j473/j474s\n");
-        return 0;
-    }
-
     int node = adt_path_offset(adt, "/arm-io/disp0");
 
     if (node < 0) {
@@ -483,6 +471,17 @@ int display_init(void)
         printf("display: Display is external\n");
     else
         printf("display: Display is internal\n");
+
+    // HACK: disable non-working display config on j473/j474s/etc
+    if (display_is_external) {
+        switch (chip_id) {
+            case T8112:
+            case T6020 ... T6022:
+                printf("display: skipping init on non-supported M2+ platform\n");
+                return 0;
+                break;
+        }
+    }
 
     if (cur_boot_args.video.width == 640 && cur_boot_args.video.height == 1136) {
         printf("display: Dummy framebuffer found, initializing display\n");

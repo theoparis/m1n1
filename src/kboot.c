@@ -15,6 +15,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "sep.h"
+#include "sio.h"
 #include "smp.h"
 #include "tunables.h"
 #include "types.h"
@@ -1165,30 +1166,36 @@ static u64 dart_get_mapping(dart_dev_t *dart, const char *path, u64 paddr, size_
     return iova;
 }
 
-static int dt_device_set_reserved_mem(int node, dart_dev_t *dart, const char *name,
-                                      uint32_t phandle, u64 paddr, u64 size)
+static int dt_device_set_reserved_mem(int node, const char *name, uint32_t phandle, u64 iova,
+                                      u64 size)
 {
     int ret;
 
-    u64 iova = dart_get_mapping(dart, name, paddr, size);
-    if (DART_IS_ERR(iova)) {
-        printf("ADT: no mapping found for '%s' 0x%012lx iova:0x%08lx)\n", name, paddr, iova);
-        return 0;
-    }
-
     ret = fdt_appendprop_u32(dt, node, "iommu-addresses", phandle);
     if (ret != 0)
-        bail("DT: could not append phandle '%s.compatible' property: %d\n", name, ret);
+        bail("FDT: could not append phandle to '%s.iommu-addresses' property: %d\n", name, ret);
 
     ret = fdt_appendprop_u64(dt, node, "iommu-addresses", iova);
     if (ret != 0)
-        bail("DT: could not append iova to '%s.iommu-addresses' property: %d\n", name, ret);
+        bail("FDT: could not append iova to '%s.iommu-addresses' property: %d\n", name, ret);
 
     ret = fdt_appendprop_u64(dt, node, "iommu-addresses", size);
     if (ret != 0)
-        bail("DT: could not append size to '%s.iommu-addresses' property: %d\n", name, ret);
+        bail("FDT: could not append size to '%s.iommu-addresses' property: %d\n", name, ret);
 
     return 0;
+}
+
+static int dt_device_set_reserved_mem_from_dart(int node, dart_dev_t *dart, const char *name,
+                                                uint32_t phandle, u64 paddr, u64 size)
+{
+    u64 iova = dart_get_mapping(dart, name, paddr, size);
+    if (DART_IS_ERR(iova)) {
+        printf("ADT: no mapping found for '%s' (0x%012lx iova:0x%08lx)\n", name, paddr, iova);
+        return 0;
+    }
+
+    return dt_device_set_reserved_mem(node, name, phandle, iova, size);
 }
 
 static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat, u64 paddr,
@@ -1197,7 +1204,7 @@ static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat,
     int ret;
     int resv_node = fdt_path_offset(dt, "/reserved-memory");
     if (resv_node < 0)
-        bail("DT: '/reserved-memory' not found\n");
+        bail("FDT: '/reserved-memory' not found\n");
 
     int node = fdt_subnode_offset(dt, resv_node, node_name);
     if (node >= 0)
@@ -1205,29 +1212,29 @@ static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat,
 
     node = fdt_add_subnode(dt, resv_node, node_name);
     if (node < 0)
-        bail("DT: failed to add node '%s' to  '/reserved-memory'\n", node_name);
+        bail("FDT: failed to add node '%s' to  '/reserved-memory'\n", node_name);
 
     uint32_t phandle;
     ret = fdt_generate_phandle(dt, &phandle);
     if (ret)
-        bail("DT: failed to generate phandle: %d\n", ret);
+        bail("FDT: failed to generate phandle: %d\n", ret);
 
     ret = fdt_setprop_u32(dt, node, "phandle", phandle);
     if (ret != 0)
-        bail("DT: couldn't set '%s.phandle' property: %d\n", node_name, ret);
+        bail("FDT: couldn't set '%s.phandle' property: %d\n", node_name, ret);
 
     u64 reg[2] = {cpu_to_fdt64(paddr), cpu_to_fdt64(size)};
     ret = fdt_setprop(dt, node, "reg", reg, sizeof(reg));
     if (ret != 0)
-        bail("DT: couldn't set '%s.reg' property: %d\n", node_name, ret);
+        bail("FDT: couldn't set '%s.reg' property: %d\n", node_name, ret);
 
     ret = fdt_setprop_string(dt, node, "compatible", compat);
     if (ret != 0)
-        bail("DT: couldn't set '%s.compatible' property: %d\n", node_name, ret);
+        bail("FDT: couldn't set '%s.compatible' property: %d\n", node_name, ret);
 
     ret = fdt_setprop_empty(dt, node, "no-map");
     if (ret != 0)
-        bail("DT: couldn't set '%s.no-map' property: %d\n", node_name, ret);
+        bail("FDT: couldn't set '%s.no-map' property: %d\n", node_name, ret);
 
     return node;
 }
@@ -1237,19 +1244,22 @@ static int dt_device_add_mem_region(const char *alias, uint32_t phandle, const c
     int ret;
     int dev_node = fdt_path_offset(dt, alias);
     if (dev_node < 0)
-        bail("DT: failed to get node for alias '%s'\n", alias);
+        bail("FDT: failed to get node for alias '%s'\n", alias);
 
     ret = fdt_appendprop_u32(dt, dev_node, "memory-region", phandle);
     if (ret != 0)
-        bail("DT: failed to append to 'memory-region' property\n");
+        bail("FDT: failed to append to 'memory-region' property\n");
 
     dev_node = fdt_path_offset(dt, alias);
     if (dev_node < 0)
-        bail("DT: failed to update node for alias '%s'\n", alias);
+        bail("FDT: failed to update node for alias '%s'\n", alias);
+
+    if (!name)
+        return 0;
 
     ret = fdt_appendprop_string(dt, dev_node, "memory-region-names", name);
     if (ret != 0)
-        bail("DT: failed to append to 'memory-region-names' property\n");
+        bail("FDT: failed to append to 'memory-region-names' property\n");
 
     return 0;
 }
@@ -1319,37 +1329,37 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
     if (dcp_alias) {
         int dcp_node = fdt_path_offset(dt, dcp_alias);
         if (dcp_node < 0) {
-            printf("DT: could not resolve '%s' alias\n", dcp_alias);
+            printf("FDT: could not resolve '%s' alias\n", dcp_alias);
             goto err; // cleanup
         }
         dart_dcp = dt_init_dart_by_node(dcp_node, 0);
         if (!dart_dcp)
-            bail_cleanup("DT: failed to init DART for '%s'\n", dcp_alias);
+            bail_cleanup("FDT: failed to init DART for '%s'\n", dcp_alias);
         dcp_phandle = fdt_get_phandle(dt, dcp_node);
     }
 
     if (disp_alias) {
         int disp_node = fdt_path_offset(dt, disp_alias);
         if (disp_node < 0) {
-            printf("DT: could not resolve '%s' alias\n", disp_alias);
+            printf("FDT: could not resolve '%s' alias\n", disp_alias);
             goto err; // cleanup
         }
         dart_disp = dt_init_dart_by_node(disp_node, 0);
         if (!dart_disp)
-            bail_cleanup("DT: failed to init DART for '%s'\n", disp_alias);
+            bail_cleanup("FDT: failed to init DART for '%s'\n", disp_alias);
         disp_phandle = fdt_get_phandle(dt, disp_node);
     }
 
     if (piodma_alias) {
         int piodma_node = fdt_path_offset(dt, piodma_alias);
         if (piodma_node < 0) {
-            printf("DT: could not resolve '%s' alias\n", piodma_alias);
+            printf("FDT: could not resolve '%s' alias\n", piodma_alias);
             goto err; // cleanup
         }
 
         dart_piodma = dt_init_dart_by_node(piodma_node, 0);
         if (!dart_piodma)
-            bail_cleanup("DT: failed to init DART for '%s'\n", piodma_alias);
+            bail_cleanup("FDT: failed to init DART for '%s'\n", piodma_alias);
         piodma_phandle = fdt_get_phandle(dt, piodma_node);
     }
 
@@ -1366,20 +1376,20 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
         uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
 
         if (maps[i].map_dcp && dart_dcp) {
-            ret = dt_device_set_reserved_mem(mem_node, dart_dcp, node_name, dcp_phandle,
-                                             region[i].paddr, region[i].size);
+            ret = dt_device_set_reserved_mem_from_dart(mem_node, dart_dcp, node_name, dcp_phandle,
+                                                       region[i].paddr, region[i].size);
             if (ret != 0)
                 goto err;
         }
         if (maps[i].map_disp && dart_disp) {
-            ret = dt_device_set_reserved_mem(mem_node, dart_disp, node_name, disp_phandle,
-                                             region[i].paddr, region[i].size);
+            ret = dt_device_set_reserved_mem_from_dart(mem_node, dart_disp, node_name, disp_phandle,
+                                                       region[i].paddr, region[i].size);
             if (ret != 0)
                 goto err;
         }
         if (maps[i].map_piodma && dart_piodma) {
-            ret = dt_device_set_reserved_mem(mem_node, dart_piodma, node_name, piodma_phandle,
-                                             region[i].paddr, region[i].size);
+            ret = dt_device_set_reserved_mem_from_dart(
+                mem_node, dart_piodma, node_name, piodma_phandle, region[i].paddr, region[i].size);
             if (ret != 0)
                 goto err;
         }
@@ -1412,10 +1422,10 @@ static int dt_add_reserved_regions(const char *dcp_alias, const char *disp_alias
 
         int dart_disp0 = dt_get_iommu_node(disp_node, 0);
         if (dart_disp0 < 0)
-            bail_cleanup("DT: failed to find 'dart-disp0'\n");
+            bail_cleanup("FDT: failed to find 'dart-disp0'\n");
 
         if (fdt_setprop_string(dt, dart_disp0, "status", "okay") < 0)
-            bail_cleanup("DT: failed to enable 'dart-disp0'\n");
+            bail_cleanup("FDT: failed to enable 'dart-disp0'\n");
     }
 err:
     if (dart_dcp)
@@ -1504,6 +1514,61 @@ static int dt_vram_reserved_region(const char *dcp_alias, const char *disp_alias
 
     return dt_add_reserved_regions(dcp_alias, disp_alias, NULL, "framebuffer",
                                    disp_reserved_regions_vram, &region, 1);
+}
+
+static int dt_reserve_asc_firmware(const char *adt_path, const char *fdt_path)
+{
+    int ret = 0;
+
+    int fdt_node = fdt_path_offset(dt, fdt_path);
+    if (fdt_node < 0) {
+        printf("FDT: '%s' not found\n", fdt_path);
+        return 0;
+    }
+
+    int node = adt_path_offset(adt, adt_path);
+    if (node < 0)
+        bail("ADT: '%s' not found\n", adt_path);
+
+    uint32_t dev_phandle = fdt_get_phandle(dt, fdt_node);
+    if (!dev_phandle) {
+        ret = fdt_generate_phandle(dt, &dev_phandle);
+        if (!ret)
+            ret = fdt_setprop_u32(dt, fdt_node, "phandle", dev_phandle);
+        if (ret != 0)
+            bail("FDT: couldn't set '%s.phandle' property: %d\n", fdt_path, ret);
+    }
+
+    const uint64_t *segments;
+    u32 segments_len;
+
+    segments = adt_getprop(adt, node, "segment-ranges", &segments_len);
+    unsigned int num_maps = segments_len / 32;
+
+    for (unsigned i = 0; i < num_maps; i++) {
+        u64 paddr = segments[0];
+        u64 iova = segments[2];
+        u32 size = segments[3];
+        segments += 4;
+
+        char node_name[64];
+        snprintf(node_name, sizeof(node_name), "asc-firmware@%lx", paddr);
+
+        int mem_node = dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", paddr, size);
+        if (mem_node < 0)
+            return ret;
+        uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
+
+        ret = dt_device_set_reserved_mem(mem_node, node_name, dev_phandle, iova, size);
+        if (ret < 0)
+            return ret;
+
+        ret = dt_device_add_mem_region(fdt_path, mem_phandle, NULL);
+        if (ret < 0)
+            return ret;
+    }
+
+    return 0;
 }
 
 static struct disp_mapping disp_reserved_regions_t8103[] = {
@@ -1651,13 +1716,79 @@ static int dt_set_display(void)
         if (ret)
             return ret;
     } else {
-        printf("DT: unknown compatible, skip display reserved-memory setup\n");
+        printf("FDT: unknown compatible, skip display reserved-memory setup\n");
         return 0;
     }
     if (ret)
         return ret;
 
     return dt_vram_reserved_region("dcp", "disp0");
+}
+
+static int dt_set_sio_fwdata(void)
+{
+    const char *path = "sio";
+
+    int node = fdt_path_offset(dt, path);
+    if (node < 0) {
+        printf("FDT: '%s' node not found\n", path);
+        return 0;
+    }
+
+    int ret = sio_setup_fwdata();
+    if (ret < 0)
+        bail("FDT: failed to set up SIO firmware data: %d\n", ret);
+
+    int phandle = fdt_get_phandle(dt, node);
+    uint32_t max_phandle;
+    ret = fdt_find_max_phandle(dt, &max_phandle);
+    if (ret)
+        bail("FDT: failed to get max phandle: %d\n", ret);
+
+    if (!phandle) {
+        phandle = ++max_phandle;
+        ret = fdt_setprop_u32(dt, node, "phandle", phandle);
+        if (ret != 0)
+            bail("FDT: couldn't set '%s.phandle' property: %d\n", path, ret);
+    }
+
+    for (int i = 0; i < sio_num_fwdata; i++) {
+        struct sio_mapping *mapping = &sio_fwdata[i];
+
+        char node_name[64];
+        snprintf(node_name, sizeof(node_name), "sio-firmware-data@%lx", mapping->phys);
+
+        int mem_node =
+            dt_get_or_add_reserved_mem(node_name, "apple,asc-mem", mapping->phys, mapping->size);
+        if (mem_node < 0)
+            return ret;
+        uint32_t mem_phandle = fdt_get_phandle(dt, mem_node);
+
+        int ret =
+            dt_device_set_reserved_mem(mem_node, node_name, phandle, mapping->iova, mapping->size);
+        if (ret < 0)
+            return ret;
+
+        ret = dt_device_add_mem_region(path, mem_phandle, NULL);
+        if (ret < 0)
+            return ret;
+    }
+
+    node = fdt_path_offset(dt, path);
+    if (node < 0)
+        bail("FDT: '%s' not found\n", path);
+
+    for (int i = 0; i < sio_num_fwparams; i++) {
+        struct sio_fwparam *param = &sio_fwparams[i];
+
+        if (fdt_appendprop_u32(dt, node, "apple,sio-firmware-params", param->key))
+            bail("FDT: couldn't append to SIO parameters\n");
+
+        if (fdt_appendprop_u32(dt, node, "apple,sio-firmware-params", param->value))
+            bail("FDT: couldn't append to SIO parameters\n");
+    }
+
+    return 0;
 }
 
 static int dt_disable_missing_devs(const char *adt_prefix, const char *dt_prefix, int max_devs)
@@ -1940,8 +2071,6 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_serial_number())
         return -1;
-    if (dt_set_memory())
-        return -1;
     if (dt_set_cpus())
         return -1;
     if (dt_set_mac_addresses())
@@ -1968,10 +2097,22 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_disable_missing_devs("i2c", "i2c@", 8))
         return -1;
+    if (dt_reserve_asc_firmware("/arm-io/sio", "sio"))
+        return -1;
+    if (dt_set_sio_fwdata())
+        return -1;
 #ifndef RELEASE
     if (dt_transfer_virtios())
         return 1;
 #endif
+
+    /*
+     * Set the /memory node late since we might be allocating from the top of memory
+     * in one of the above devicetree prep functions, and we want an up-to-date value
+     * for the usable memory span to make it into the devicetree.
+     */
+    if (dt_set_memory())
+        return -1;
 
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
