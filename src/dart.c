@@ -195,11 +195,9 @@ const struct dart_params dart_t8110 = {
 
 dart_dev_t *dart_init(uintptr_t base, u8 device, bool keep_pts, enum dart_type_t type)
 {
-    dart_dev_t *dart = malloc(sizeof(*dart));
+    dart_dev_t *dart = calloc(1, sizeof(*dart));
     if (!dart)
         return NULL;
-
-    memset(dart, 0, sizeof(*dart));
 
     dart->regs = base;
     dart->device = device;
@@ -324,6 +322,8 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
     }
     if (ADT_GETPROP(adt, node, "vm-base", &dart->vm_base) < 0)
         dart->vm_base = 0;
+    else
+        dart->vm_base &= (1LLU << 36) - 1;
 
     return dart;
 }

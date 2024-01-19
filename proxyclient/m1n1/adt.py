@@ -112,11 +112,11 @@ PMGRClocks = SafeGreedyRange(Struct(
 ))
 
 PMGRPowerDomains = SafeGreedyRange(Struct(
-    "unk" / Const(0, Int8ul),
+    "unk" / Int8ul,
     "perf_idx" / Int8ul,
     "perf_block" / Int8ul,
     "id" / Int8ul,
-    Const(0, Int32ul),
+    "flags" / Int32ul,
     "name" / PaddedString(16, "ascii"),
 ))
 
@@ -189,6 +189,61 @@ SpeakerThieleSmall = Struct(
         "name" / FourCC,
     )),
     "checksum" / Hex(Int16ul),
+)
+
+TunableGlobal = Struct(
+    "reg_idx" / Hex(Int32ul),
+    "offset" / Hex(Int32ul),
+    "mask" / Hex(Int32ul),
+    "value" / Hex(Int32ul),
+)
+
+TunableLocal = Struct(
+    "offset" / Hex(Int32ul),
+    "size" / Hex(Int32ul),
+    "mask" / Hex(Int64ul),
+    "value" / Hex(Int64ul),
+)
+
+DAPFT8110 = Struct(
+    "start" / Hex(Int64ul),
+    "end" / Hex(Int64ul),
+    "r20" / Hex(Int32ul),
+    "unk1" / Hex(Int32ul),
+    "r4" / Hex(Int32ul),
+    "unk2" / Array(5, Hex(Int32ul)),
+    "unk3" / Hex(Int8ul),
+    "r0h" / Hex(Int8ul),
+    "r0l" / Hex(Int8ul),
+    "unk4" / Hex(Int8ul),
+)
+
+DAPFT8110B = Struct(
+    "start" / Hex(Int64ul),
+    "end" / Hex(Int64ul),
+    "r20" / Hex(Int32ul),
+    "unk1" / Hex(Int32ul),
+    "r4" / Hex(Int32ul),
+    "unk2" / Array(5, Hex(Int32ul)),
+    "unk3" / Hex(Int8ul),
+    "r0h" / Hex(Int8ul),
+    "r0l" / Hex(Int8ul),
+    "unk4" / Hex(Int8ul),
+    "pad" / Hex(Int32ul),
+)
+
+DAPFT8110C = Struct(
+    "start" / Hex(Int64ul),
+    "end" / Hex(Int64ul),
+    "r20" / Hex(Int32ul),
+    "unk1" / Hex(Int32ul),
+    "r4" / Hex(Int32ul),
+    "unk2" / Array(5, Hex(Int32ul)),
+    "unk3" / Hex(Int8ul),
+    "r0h" / Hex(Int8ul),
+    "r0l" / Hex(Int8ul),
+    "unk4" / Hex(Int8ul),
+    "pad" / Array(3, Hex(Int8ul)),
 )
 
 DEV_PROPERTIES = {
@@ -283,6 +338,11 @@ DEV_PROPERTIES = {
             "speaker-thiele-small": SpeakerThieleSmall,
         },
     },
+    "apcie*": {
+        "*": {
+            "apcie-*-tunables": GreedyRange(TunableLocal),
+        }
+    },
 }
 
 def parse_prop(node, path, node_name, name, v, is_template=False):
@@ -359,6 +419,20 @@ def parse_prop(node, path, node_name, name, v, is_template=False):
         pat = Hex(Int64ul) if pac == 2 else Array(pac, Hex(Int32ul))
         st = Hex(Int64ul) if sc == 2 else Array(sc, Hex(Int32ul))
         t = SafeGreedyRange(Struct("bus_addr" / at, "parent_addr" / pat, "size" / st))
+
+    elif name.startswith("dapf-instance-"):
+        try:
+            flags = node.dart_options
+        except AttributeError:
+            return None, v
+        if flags & 0x40:
+            if len(v) % DAPFT8110B.sizeof() == 0:
+                if len(v) % DAPFT8110C.sizeof() != 0:
+                    t = GreedyRange(DAPFT8110B)
+            else:
+                t = GreedyRange(DAPFT8110C)
+        else:
+            t = GreedyRange(DAPFT8110)
 
     elif name == "interrupts":
         # parse "interrupts" as Array of Int32ul, wrong for nodes whose
@@ -540,6 +614,8 @@ class ADTNode:
         if attr[0] == "_":
             del self.__dict__[attr]
             return
+        attr = attr.replace("_", "-")
+        attr = attr.replace("--", "_")
         del self._properties[attr]
 
     def getprop(self, name, default=None):

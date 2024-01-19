@@ -87,6 +87,7 @@ struct rtkit_dev {
     dart_dev_t *dart;
     iova_domain_t *dart_iovad;
     sart_dev_t *sart;
+    bool sram;
 
     u64 dva_base;
 
@@ -126,7 +127,7 @@ struct crashlog_entry {
 };
 
 rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *asc, dart_dev_t *dart,
-                        iova_domain_t *dart_iovad, sart_dev_t *sart)
+                        iova_domain_t *dart_iovad, sart_dev_t *sart, bool sram)
 {
     if (dart && sart) {
         printf("rtkit: Cannot use both SART and DART simultaneously\n");
@@ -138,13 +139,17 @@ rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *asc, dart_dev_t *dart,
         return NULL;
     }
 
-    rtkit_dev_t *rtk = malloc(sizeof(*rtk));
+    if (sram && (dart || sart)) {
+        printf("rtkit: cannot use SRAM with DART or SART \n");
+        return NULL;
+    }
+
+    rtkit_dev_t *rtk = calloc(1, sizeof(*rtk));
     if (!rtk)
         return NULL;
-    memset(rtk, 0, sizeof(*rtk));
 
     size_t name_len = strlen(name);
-    rtk->name = malloc(name_len + 1);
+    rtk->name = calloc(name_len + 1, 1);
     if (!rtk->name)
         goto out_free_rtk;
     strcpy(rtk->name, name);
@@ -153,6 +158,7 @@ rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *asc, dart_dev_t *dart,
     rtk->dart = dart;
     rtk->dart_iovad = dart_iovad;
     rtk->sart = sart;
+    rtk->sram = sram;
     rtk->iop_power = RTKIT_POWER_OFF;
     rtk->ap_power = RTKIT_POWER_OFF;
     rtk->dva_base = 0;
@@ -277,7 +283,16 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
     size_t sz = n_4kpages << 12;
     u64 addr = FIELD_GET(MSG_BUFFER_REQUEST_IOVA, msg->msg);
 
-    if (addr) {
+    if (rtk->sram) {
+        if (!addr) {
+            rtkit_printf("SRAM buffers needs to be provided by the IOP\n");
+            return false;
+        }
+        bfr->dva = addr;
+        bfr->bfr = (void *)addr;
+        bfr->sz = sz;
+        return true;
+    } else if (addr) {
         bfr->dva = addr & ~rtk->dva_base;
         bfr->sz = sz;
         bfr->bfr = dart_translate(rtk->dart, bfr->dva & IOVA_MASK);
@@ -345,6 +360,14 @@ static void rtkit_crashed(rtkit_dev_t *rtk)
     }
 }
 
+bool rtkit_can_recv(rtkit_dev_t *rtk)
+{
+    if (rtk->crashed)
+        return false;
+
+    return asc_can_recv(rtk->asc);
+}
+
 int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
 {
     struct asc_message asc_msg;
@@ -363,7 +386,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
         msg->msg = asc_msg.msg0;
         msg->ep = (u8)asc_msg.msg1;
 
-        /* if this is an app message we can just forwad it to the caller */
+        /* if this is an app message we can just forward it to the caller */
         if (msg->ep >= 0x20)
             return 1;
 

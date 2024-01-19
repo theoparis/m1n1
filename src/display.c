@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h"
+
 #include "display.h"
 #include "adt.h"
 #include "assert.h"
@@ -12,8 +14,8 @@
 #include "utils.h"
 #include "xnuboot.h"
 
-#define DISPLAY_STATUS_DELAY   100
-#define DISPLAY_STATUS_RETRIES 20
+#define DISPLAY_STATUS_DELAY         100
+#define DISPLAY_STATUS_RETRIES(dptx) ((dptx) ? 100 : 20)
 
 #define COMPARE(a, b)                                                                              \
     if ((a) > (b)) {                                                                               \
@@ -28,6 +30,75 @@ static dcp_iboot_if_t *iboot;
 static u64 fb_dva;
 static u64 fb_size;
 bool display_is_external;
+bool display_is_dptx;
+
+static const display_config_t display_config_m1 = {
+    .dcp = "/arm-io/dcp",
+    .dcp_dart = "/arm-io/dart-dcp",
+    .disp_dart = "/arm-io/dart-disp0",
+    .pmgr_dev = "DISP0_CPU0",
+    .dcp_alias = "dcp",
+};
+
+#define USE_DCPEXT 1
+
+static const display_config_t display_config_m2 = {
+#if USE_DCPEXT
+    .dcp = "/arm-io/dcpext",
+    .dcp_dart = "/arm-io/dart-dcpext",
+    .disp_dart = "/arm-io/dart-dispext0",
+    .pmgr_dev = "DISPEXT_CPU0",
+    .dcp_alias = "dcpext",
+    .dcp_index = 1,
+#else
+    .dcp = "/arm-io/dcp",
+    .dcp_dart = "/arm-io/dart-dcp",
+    .disp_dart = "/arm-io/dart-disp0",
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio",
+    .dptx_phy = "/arm-io/dptx-phy",
+    .pmgr_dev = "DISP0_CPU0",
+    .dcp_alias = "dcp",
+    .dcp_index = 0,
+#endif
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio",
+    .dptx_phy = "/arm-io/dptx-phy",
+    .num_dptxports = 2,
+};
+
+static const display_config_t display_config_m2_pro_max = {
+#if USE_DCPEXT
+    .dcp = "/arm-io/dcpext0",
+    .dcp_dart = "/arm-io/dart-dcpext0",
+    .disp_dart = "/arm-io/dart-dispext0",
+    .pmgr_dev = "DISPEXT0_CPU0",
+    .dcp_alias = "dcpext0",
+    .dcp_index = 1,
+    .num_dptxports = 2,
+#else
+    .dcp = "/arm-io/dcp0",
+    .dcp_dart = "/arm-io/dart-dcp0",
+    .disp_dart = "/arm-io/dart-disp0",
+    .pmgr_dev = "DISP0_CPU0",
+    .dcp_alias = "dcp",
+    .dcp_index = 0,
+    .num_dptxports = 1,
+#endif
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio0",
+    .dptx_phy = "/arm-io/lpdptx-phy0",
+};
+
+static const display_config_t display_config_m2_ultra = {
+    .dcp = "/arm-io/dcpext4",
+    .dcp_dart = "/arm-io/dart-dcpext4",
+    .disp_dart = "/arm-io/dart-dispext4",
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio1",
+    .dptx_phy = "/arm-io/lpdptx-phy1",
+    .pmgr_dev = "DISPEXT0_CPU0",
+    .dcp_alias = "dcpext4",
+    .dcp_index = 1,
+    .num_dptxports = 2,
+    .die = 1,
+};
 
 #define abs(x) ((x) >= 0 ? (x) : -(x))
 
@@ -160,12 +231,33 @@ static uintptr_t display_map_fb(uintptr_t iova, u64 paddr, u64 size)
     return iova;
 }
 
+const display_config_t *display_get_config(void)
+{
+    if (adt_is_compatible(adt, 0, "J473AP"))
+        return &display_config_m2;
+    else if (adt_is_compatible(adt, 0, "J474sAP") || adt_is_compatible(adt, 0, "J475cAP"))
+        return &display_config_m2_pro_max;
+    else if (adt_is_compatible(adt, 0, "J180dAP") || adt_is_compatible(adt, 0, "J475dAP"))
+        return &display_config_m2_ultra;
+    else
+        return &display_config_m1;
+}
+
 int display_start_dcp(void)
 {
     if (iboot)
         return 0;
 
-    dcp = dcp_init("/arm-io/dcp", "/arm-io/dart-dcp", "/arm-io/dart-disp0");
+#ifdef NO_DISPLAY
+    printf("display: NO_DISPLAY!\n");
+    return 0;
+#endif
+
+    const display_config_t *disp_cfg = display_get_config();
+
+    display_is_dptx = !!disp_cfg->dptx_phy[0];
+
+    dcp = dcp_init(disp_cfg);
     if (!dcp) {
         printf("display: failed to initialize DCP\n");
         return -1;
@@ -250,11 +342,6 @@ int display_parse_mode(const char *config, dcp_timing_mode_t *mode, struct displ
 static int display_swap(u64 iova, u32 stride, u32 width, u32 height)
 {
     int ret;
-    int swap_id = ret = dcp_ib_swap_begin(iboot);
-    if (swap_id < 0) {
-        printf("display: failed to start swap\n");
-        return -1;
-    }
 
     dcp_layer_t layer = {
         .planes = {{
@@ -271,25 +358,23 @@ static int display_swap(u64 iova, u32 stride, u32 width, u32 height)
         .transform = XFRM_NONE,
     };
 
-    dcp_rect_t rect = {width, height, 0, 0};
-
-    if ((ret = dcp_ib_swap_set_layer(iboot, 0, &layer, &rect, &rect)) < 0) {
-        printf("display: failed to set layer\n");
+    if ((ret = dcp_ib_set_surface(iboot, &layer)) < 0) {
+        printf("display: failed to set surface\n");
         return -1;
     }
 
-    if ((ret = dcp_ib_swap_end(iboot)) < 0) {
-        printf("display: failed to complete swap\n");
-        return -1;
-    }
-
-    return swap_id;
+    return 0;
 }
 
 int display_configure(const char *config)
 {
     dcp_timing_mode_t want;
     struct display_options opts = {0};
+
+#ifdef NO_DISPLAY
+    printf("display: skip configuration (NO_DISPLAY)\n");
+    return 0;
+#endif
 
     display_parse_mode(config, &want, &opts);
 
@@ -299,10 +384,17 @@ int display_configure(const char *config)
     if (ret < 0)
         return ret;
 
-    // Power on
-    if ((ret = dcp_ib_set_power(iboot, true)) < 0) {
-        printf("display: failed to set power\n");
-        return ret;
+    // connect dptx if necessary
+    if (display_is_dptx) {
+        ret = dcp_connect_dptx(dcp);
+        if (ret < 0)
+            return ret;
+    }
+
+    if (!display_is_external) {
+        // Sonoma bug workaround: Power on internal panel early
+        if ((ret = dcp_ib_set_power(iboot, true)) < 0)
+            printf("display: failed to set power on (continuing anyway)\n");
     }
 
     // Detect if display is connected
@@ -312,13 +404,14 @@ int display_configure(const char *config)
     /* After boot DCP does not immediately report a connected display. Retry getting display
      * information for 2 seconds.
      */
-    while (retries++ < DISPLAY_STATUS_RETRIES) {
+    while (retries++ < (DISPLAY_STATUS_RETRIES(display_is_dptx))) {
+        dcp_work(dcp);
         hpd = dcp_ib_get_hpd(iboot, &timing_cnt, &color_cnt);
         if (hpd < 0)
             ret = hpd;
         else if (hpd && timing_cnt && color_cnt)
             break;
-        if (retries < DISPLAY_STATUS_RETRIES)
+        if (retries < DISPLAY_STATUS_RETRIES(display_is_dptx))
             mdelay(DISPLAY_STATUS_DELAY);
     }
     printf("display: waited %d ms for display status\n", (retries - 1) * DISPLAY_STATUS_DELAY);
@@ -331,6 +424,15 @@ int display_configure(const char *config)
 
     if (!hpd || !timing_cnt || !color_cnt)
         return 0;
+
+    // Power on
+    if ((ret = dcp_ib_set_power(iboot, true)) < 0) {
+        printf("display: failed to set power\n");
+        return ret;
+    }
+
+    // Sonoma bug workaround
+    mdelay(100);
 
     // Find best modes
     dcp_timing_mode_t *tmodes, tbest;
@@ -351,8 +453,12 @@ int display_configure(const char *config)
 
     // Set mode
     if ((ret = dcp_ib_set_mode(iboot, &tbest, &cbest)) < 0) {
-        printf("display: failed to set mode\n");
-        return -1;
+        printf("display: failed to set mode. trying again...\n");
+        mdelay(500);
+        if ((ret = dcp_ib_set_mode(iboot, &tbest, &cbest)) < 0) {
+            printf("display: failed to set mode twice.\n");
+            return ret;
+        }
     }
 
     u64 fb_pa = cur_boot_args.video.base;
@@ -429,6 +535,11 @@ int display_configure(const char *config)
 
     printf("display: swapped! (swap_id=%d)\n", ret);
 
+    // Wait until the swap completes before powering down DCP
+    // 50ms is too low, 100 works, 150 for good measure
+    mdelay(150);
+
+    bool reinit = false;
     if (fb_pa != cur_boot_args.video.base || cur_boot_args.video.stride != stride ||
         cur_boot_args.video.width != tbest.width || cur_boot_args.video.height != tbest.height ||
         cur_boot_args.video.depth != 30) {
@@ -436,10 +547,17 @@ int display_configure(const char *config)
         cur_boot_args.video.stride = stride;
         cur_boot_args.video.width = tbest.width;
         cur_boot_args.video.height = tbest.height;
-        //cur_boot_args.video.depth = 30 | (opts.retina ? FB_DEPTH_FLAG_RETINA : 0);
-        cur_boot_args.video.depth = 32;
-        fb_reinit();
+        cur_boot_args.video.depth = 30 | (opts.retina ? FB_DEPTH_FLAG_RETINA : 0);
+        reinit = true;
     }
+
+    if (!display_is_external && !(cur_boot_args.video.depth & FB_DEPTH_FLAG_RETINA)) {
+        cur_boot_args.video.depth |= FB_DEPTH_FLAG_RETINA;
+        reinit = true;
+    }
+
+    if (reinit)
+        fb_reinit();
 
     /* Update for python / subsequent stages */
     memcpy((void *)boot_args_addr, &cur_boot_args, sizeof(cur_boot_args));
@@ -459,10 +577,15 @@ int display_configure(const char *config)
 
 int display_init(void)
 {
-    int node = adt_path_offset(adt, "/arm-io/disp0");
+    const char *disp_path;
+    if (adt_is_compatible(adt, 0, "J180dAP") || adt_is_compatible(adt, 0, "J475dAP"))
+        disp_path = "/arm-io/dispext4";
+    else
+        disp_path = "/arm-io/disp0";
 
+    int node = adt_path_offset(adt, disp_path);
     if (node < 0) {
-        printf("DISP0 node not found!\n");
+        printf("%s node not found!\n", disp_path);
         return -1;
     }
 
@@ -472,22 +595,16 @@ int display_init(void)
     else
         printf("display: Display is internal\n");
 
-    // HACK: disable non-working display config on j473/j474s/etc
-    if (display_is_external) {
-        switch (chip_id) {
-            case T8112:
-            case T6020 ... T6022:
-                printf("display: skipping init on non-supported M2+ platform\n");
-                return 0;
-                break;
-        }
-    }
-
     if (cur_boot_args.video.width == 640 && cur_boot_args.video.height == 1136) {
         printf("display: Dummy framebuffer found, initializing display\n");
         return display_configure(NULL);
     } else if (display_is_external) {
         printf("display: External display found, reconfiguring\n");
+        return display_configure(NULL);
+    } else if (!(cur_boot_args.video.depth & FB_DEPTH_FLAG_RETINA)) {
+        printf("display: Internal display with non-retina flag, assuming Sonoma bug and "
+               "reconfiguring\n");
+        fb_clear_direct(); // Old m1n1 stage1 ends up with an ugly logo situation, clear it.
         return display_configure(NULL);
     } else {
         printf("display: Display is already initialized (%ldx%ld)\n", cur_boot_args.video.width,
