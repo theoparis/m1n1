@@ -22,14 +22,14 @@ CC := $(TOOLCHAIN)clang --target=$(ARCH)
 AS := $(TOOLCHAIN)clang --target=$(ARCH)
 LD := $(TOOLCHAIN)ld.lld
 OBJCOPY := $(TOOLCHAIN)llvm-objcopy
-CLANG_FORMAT := $(TOOLCHAIN)clang-format
+CLANG_FORMAT ?= $(TOOLCHAIN)clang-format
 EXTRA_CFLAGS ?=
 else
 CC := $(TOOLCHAIN)$(ARCH)gcc
 AS := $(TOOLCHAIN)$(ARCH)gcc
 LD := $(TOOLCHAIN)$(ARCH)ld
 OBJCOPY := $(TOOLCHAIN)$(ARCH)objcopy
-CLANG_FORMAT := clang-format
+CLANG_FORMAT ?= clang-format
 EXTRA_CFLAGS ?= -Wstack-usage=2048
 endif
 
@@ -176,7 +176,7 @@ clean:
 format:
 	$(CLANG_FORMAT) -i src/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
 format-check:
-	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/*.h src/dcp/*.c src/dcp/*.h sysinc/*.h
+	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/dcp/*.c src/math/*.c src/*.h src/dcp/*.h src/math/*.h sysinc/*.h
 rustfmt:
 	cd rust && cargo fmt
 rustfmt-check:
